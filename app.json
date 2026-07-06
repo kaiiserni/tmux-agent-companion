@@ -11,7 +11,11 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.kaiiserni.tmuxagentcompanion",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoadsInWebContent": true,
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {

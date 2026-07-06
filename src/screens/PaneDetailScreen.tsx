@@ -3,8 +3,10 @@ import { useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { WebView } from 'react-native-webview';
 import type { Pane, TranscriptEntry } from '../api';
 import { ageLabel, Badge } from '../components';
+import { getToken } from '../config';
 import { redact, useApp } from '../context';
 import { hapticSelect, hapticSuccess, hapticTap, hapticWarn } from '../haptics';
 import { LIVE_POLL, useActivity, usePaneActions, usePanes, usePrompt, useScreen, useTranscript } from '../hooks';
@@ -111,6 +113,39 @@ function ActionButton({ label, color, onPress, busy }: { label: string; color: s
   );
 }
 
+// Live interactive terminal: a thin WebView pointing at the bridge's xterm.js page
+// (`/term`), which opens the `/terminal` WebSocket. All terminal logic lives server-side.
+function TerminalView({ paneId }: { paneId: string }) {
+  const { colors, font } = useTheme();
+  const { baseUrl } = useApp();
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => {
+    getToken().then(setToken);
+  }, []);
+
+  if (!baseUrl) {
+    return (
+      <View style={styles.termCenter}>
+        <Text style={[styles.hint, { color: colors.muted, fontFamily: font.regular }]}>Set the bridge URL in Settings.</Text>
+      </View>
+    );
+  }
+  if (token === null) return <ActivityIndicator color={colors.accent} style={{ marginTop: 24 }} />;
+  const url = `${baseUrl}/term?pane_id=${encodeURIComponent(paneId)}&token=${encodeURIComponent(token)}`;
+  return (
+    <WebView
+      source={{ uri: url }}
+      style={{ flex: 1, backgroundColor: colors.bg }}
+      keyboardDisplayRequiresUserAction={false}
+      hideKeyboardAccessoryView
+      scrollEnabled={false}
+      originWhitelist={['*']}
+      mixedContentMode="always"
+      allowsInlineMediaPlayback
+    />
+  );
+}
+
 export function PaneDetailScreen() {
   const { colors, font } = useTheme();
   const { prefs } = useApp();
@@ -140,7 +175,7 @@ export function PaneDetailScreen() {
   const pane: Pane | undefined = panes.data?.panes.find((p) => p.pane_id === paneId);
   const transcript = useTranscript(paneId, fast ? LIVE_POLL : 12000);
   const activity = useActivity(paneId);
-  const [detailTab, setDetailTab] = useState<'conversation' | 'screen' | 'activity'>('conversation');
+  const [detailTab, setDetailTab] = useState<'conversation' | 'screen' | 'activity' | 'terminal'>('conversation');
   const screen = useScreen(paneId, detailTab === 'screen');
   const actions = usePaneActions();
   const kbHeight = useKeyboardHeight();
@@ -271,19 +306,22 @@ export function PaneDetailScreen() {
 
       {/* tabs */}
       <View style={styles.tabBar}>
-        {(['conversation', 'screen', 'activity'] as const).map((t) => (
+        {(['conversation', 'screen', 'activity', 'terminal'] as const).map((t) => (
           <Pressable
             key={t}
             onPress={() => setDetailTab(t)}
             style={[styles.tab, { borderColor: detailTab === t ? colors.accent : colors.border, backgroundColor: detailTab === t ? colors.surfaceAlt : 'transparent' }]}
           >
             <Text style={{ color: detailTab === t ? colors.accent : colors.muted, fontFamily: font.medium, fontSize: 12 }}>
-              {t === 'conversation' ? 'Conversation' : t === 'screen' ? 'Screen' : 'Activity'}
+              {t === 'conversation' ? 'Conv' : t === 'screen' ? 'Screen' : t === 'activity' ? 'Activity' : 'Terminal'}
             </Text>
           </Pressable>
         ))}
       </View>
       </View>
+      {detailTab === 'terminal' ? (
+        <TerminalView paneId={paneId} />
+      ) : (
       <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
       {/* conversation */}
@@ -348,7 +386,8 @@ export function PaneDetailScreen() {
         )
       ) : null}
       </ScrollView>
-      {isClaude && detailTab !== 'activity' ? (
+      )}
+      {isClaude && detailTab !== 'activity' && detailTab !== 'terminal' ? (
         <View>
           {actions.send.isError ? (
             <Text style={[styles.replyError, { color: colors.attention, fontFamily: font.regular }]}>
@@ -424,6 +463,7 @@ const styles = StyleSheet.create({
   needs: { fontSize: 13, marginTop: 8, lineHeight: 18 },
   decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginTop: 12 },
   decisionScroll: { maxHeight: 300 },
+  termCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   option: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6 },
   escBtn: { paddingVertical: 6, alignItems: 'center' },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' },
