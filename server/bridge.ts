@@ -608,16 +608,129 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-Bun.serve({
+// --- terminal (PTY sidecar over WebSocket) -----------------------------------
+// node-pty won't spawn under Bun (posix_spawnp fails); it works under Node. So the
+// PTY runs in a Node sidecar (pty-bridge.cjs) that we Bun.spawn per WS connection.
+
+const NODE_BIN = process.env.NODE_BIN || "/opt/homebrew/bin/node";
+const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
+const PTY_BRIDGE = join(import.meta.dir, "pty-bridge.cjs");
+const XTERM_DIR = join(import.meta.dir, "node_modules/@xterm");
+
+function tokenOk(raw: string): boolean {
+  if (!TOKEN) return false;
+  const a = Buffer.from(raw);
+  const b = Buffer.from(TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+interface TermData {
+  paneId: string;
+  session: string;
+  winIndex: string;
+  cols: number;
+  rows: number;
+  termSession?: string;
+  child?: ReturnType<typeof Bun.spawn>;
+}
+
+// Frame control messages onto the sidecar's stdin: [type:1][len:4 BE][payload].
+function writeFrame(child: ReturnType<typeof Bun.spawn> | undefined, type: number, payload: Buffer) {
+  const sink = child?.stdin as import("bun").FileSink | undefined;
+  if (!sink) return;
+  const header = Buffer.alloc(5);
+  header[0] = type;
+  header.writeUInt32BE(payload.length, 1);
+  sink.write(header);
+  sink.write(payload);
+  sink.flush();
+}
+
+// Clean up any leftover terminal sessions from a previous crash.
+for (const s of tmux(["list-sessions", "-F", "#{session_name}"]).out.split("\n")) {
+  if (s.startsWith("term_")) tmux(["kill-session", "-t", s]);
+}
+
+function readVendor(p: string): string {
+  try {
+    return readFileSync(p, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+const TERM_BOOTSTRAP = `
+const params=new URLSearchParams(location.search);
+const th={background:'#1a1b26',foreground:'#c0caf5',cursor:'#c0caf5',selectionBackground:'#33467c',black:'#15161e',red:'#f7768e',green:'#9ece6a',yellow:'#e0af68',blue:'#7aa2f7',magenta:'#bb9af7',cyan:'#7dcfff',white:'#c0caf5',brightBlack:'#414868',brightRed:'#f7768e',brightGreen:'#9ece6a',brightYellow:'#e0af68',brightBlue:'#7aa2f7',brightMagenta:'#bb9af7',brightCyan:'#7dcfff',brightWhite:'#c0caf5'};
+const term=new Terminal({fontFamily:'Menlo,Monaco,monospace',fontSize:13,theme:th,cursorBlink:true,allowProposedApi:true});
+const FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
+const fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));fit.fit();
+var ws;
+function wsurl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/terminal?pane_id='+encodeURIComponent(params.get('pane_id')||'')+'&token='+encodeURIComponent(params.get('token')||'')+'&cols='+term.cols+'&rows='+term.rows;}
+function doFit(){try{fit.fit();}catch(e){}if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'r',c:term.cols,r:term.rows}));}
+function connect(){ws=new WebSocket(wsurl());ws.binaryType='arraybuffer';
+  ws.onopen=function(){doFit();term.focus();};
+  ws.onmessage=function(e){term.write(typeof e.data==='string'?e.data:new Uint8Array(e.data));};
+  ws.onclose=function(){term.write('\\r\\n\\x1b[38;5;210m[disconnected \\u2014 reconnecting]\\x1b[0m\\r\\n');setTimeout(connect,1500);};
+}
+term.onData(function(d){if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'i',d:d}));});
+window.addEventListener('resize',doFit);connect();
+`;
+
+function buildTermHtml(): string {
+  const css = readVendor(join(XTERM_DIR, "xterm/css/xterm.css"));
+  const xterm = readVendor(join(XTERM_DIR, "xterm/lib/xterm.js"));
+  const fit = readVendor(join(XTERM_DIR, "addon-fit/lib/addon-fit.js"));
+  return (
+    "<!doctype html><html><head><meta charset=utf-8>" +
+    '<meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">' +
+    "<style>" + css + "\nhtml,body{margin:0;height:100%;background:#1a1b26;overflow:hidden}#t{height:100%;width:100%}</style>" +
+    "</head><body><div id=t></div>" +
+    "<script>" + xterm + "</script><script>" + fit + "</script>" +
+    "<script>" + TERM_BOOTSTRAP + "</script></body></html>"
+  );
+}
+const TERM_HTML = buildTermHtml();
+
+function htmlResponse(html: string): Response {
+  return new Response(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8", "Access-Control-Allow-Origin": "*" },
+  });
+}
+
+Bun.serve<TermData>({
   port: BRIDGE_PORT,
   hostname: "0.0.0.0",
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const path = url.pathname;
     if (req.method === "OPTIONS") return json({});
 
     // /health is the only unauthenticated route (connectivity probe, no data).
     if (req.method === "GET" && path === "/health") return json({ ok: true, auth: !!TOKEN });
+
+    // Terminal WebSocket: a browser WS can't send an Authorization header, so the
+    // token comes via query param (constant-time checked). Upgrade before the gate.
+    if (path === "/terminal") {
+      if (!tokenOk(url.searchParams.get("token") ?? "")) return json({ error: "unauthorized" }, 401);
+      const paneId = url.searchParams.get("pane_id") ?? "";
+      const live = paneExists(paneId);
+      if (!live) return json({ error: "unknown pane" }, 404);
+      const winIndex = live.target.split(":")[1]?.split(".")[0] ?? "";
+      const ok = server.upgrade(req, {
+        data: {
+          paneId: live.paneId,
+          session: live.session,
+          winIndex,
+          cols: Number(url.searchParams.get("cols") ?? "80"),
+          rows: Number(url.searchParams.get("rows") ?? "24"),
+        },
+      });
+      return ok ? undefined : json({ error: "upgrade failed" }, 400);
+    }
+
+    // The xterm.js web UI. Open (no data of its own); the WS it opens is token-gated.
+    if (req.method === "GET" && path === "/term") return htmlResponse(TERM_HTML);
 
     // Everything else is token-gated: the read endpoints carry CONFIDENTIAL
     // cross-client agent data, so LAN reachability alone must not grant access.
@@ -732,6 +845,60 @@ Bun.serve({
     }
 
     return json({ error: "not found" }, 404);
+  },
+  websocket: {
+    open(ws) {
+      const d = ws.data;
+      const termSession = `term_${d.paneId.replace("%", "")}_${Date.now() % 100000}`;
+      d.termSession = termSession;
+      // Grouped session: shares the window list but has its own size + current window,
+      // so attaching from the phone doesn't move or shrink Kai's real tmux client.
+      tmux(["new-session", "-d", "-s", termSession, "-t", d.session]);
+      tmux(["set-option", "-t", termSession, "destroy-unattached", "off"]);
+      if (d.winIndex) tmux(["select-window", "-t", `${termSession}:${d.winIndex}`]);
+      const child = Bun.spawn([NODE_BIN, PTY_BRIDGE, termSession, String(d.cols), String(d.rows)], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "inherit",
+        env: { ...process.env, TMUX_BIN, HOME: homedir() },
+      });
+      d.child = child;
+      audit("terminal-open", d.paneId, termSession);
+      (async () => {
+        try {
+          for await (const chunk of child.stdout as ReadableStream<Uint8Array>) ws.send(chunk);
+        } catch {
+          /* stream closed */
+        }
+        try {
+          ws.close();
+        } catch {
+          /* already closed */
+        }
+      })();
+    },
+    message(ws, message) {
+      const d = ws.data;
+      if (!d.child) return;
+      let m: { t?: string; d?: string; c?: number; r?: number };
+      try {
+        m = JSON.parse(typeof message === "string" ? message : message.toString());
+      } catch {
+        return;
+      }
+      if (m.t === "i" && typeof m.d === "string") writeFrame(d.child, 0, Buffer.from(m.d, "utf8"));
+      else if (m.t === "r") writeFrame(d.child, 1, Buffer.from(`${m.c ?? 80},${m.r ?? 24}`));
+    },
+    close(ws) {
+      const d = ws.data;
+      try {
+        d.child?.kill();
+      } catch {
+        /* already gone */
+      }
+      if (d.termSession) tmux(["kill-session", "-t", d.termSession]);
+      audit("terminal-close", d.paneId, d.termSession ?? "");
+    },
   },
 });
 

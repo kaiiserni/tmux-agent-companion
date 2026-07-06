@@ -35,6 +35,10 @@ Every route except `GET /health` requires `Authorization: Bearer <token>`.
 | GET | `/transcript?pane_id=&limit=` | Claude Code conversation (parsed JSONL) |
 | GET | `/screen?pane_id=&lines=` | `capture-pane` frame |
 | GET | `/prompt?pane_id=` | pending choice menu (options + descriptions) |
+| GET | `/system` | CPU% / memory / load average |
+| GET | `/claude-usage` | Claude subscription usage (5h + weekly), read from the poller cache |
+| GET | `/term` | open; xterm.js terminal web UI (loaded by the app's WebView) |
+| WS | `/terminal?pane_id=&token=&cols=&rows=` | interactive PTY attached to the pane; token via query param (a browser WS can't send a header) |
 | POST | `/seen` `{pane_id}` | stamp `@pane_last_seen_at` |
 | POST | `/mark-unread` `{pane_id,on}` | toggle pin |
 | POST | `/clear` `{pane_id}` | clear pending flags |
@@ -42,8 +46,21 @@ Every route except `GET /health` requires `Authorization: Bearer <token>`.
 | POST | `/send` `{pane_id,text}` | free-text reply (claude panes only) |
 | POST | `/answer` `{pane_id,key}` | select a menu option / send a key |
 
-Mutations are written to an append-only audit log at
+Mutations (incl. terminal open/close) are written to an append-only audit log at
 `~/.local/state/agent-bridge/audit.log`.
+
+## Terminal mode (native dep)
+
+`/terminal` streams a real PTY attached to the pane (via a temporary grouped tmux
+session, so the phone doesn't move or resize your real client). `node-pty` **does not
+spawn under Bun**, so the PTY runs in a Node sidecar (`pty-bridge.cjs`) that the bridge
+spawns per connection. This adds two things to a plain Bun setup:
+
+- `node` must be installed (the sidecar runs under Node) and `node-pty` compiled:
+  `bun install` then `cd node_modules/node-pty && npx node-gyp rebuild` (needs Xcode CLT /
+  build tools). Rebuild after a Node major upgrade.
+- Env overrides if the binaries aren't at the defaults: `NODE_BIN` (default
+  `/opt/homebrew/bin/node`), `TMUX_BIN` (default `/opt/homebrew/bin/tmux`).
 
 ## Run as a service
 
