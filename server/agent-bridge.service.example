@@ -1,0 +1,19 @@
+# Linux systemd user service. Copy to ~/.config/systemd/user/agent-bridge.service,
+# replace the paths, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agent-bridge
+# (run `loginctl enable-linger $USER` so it survives logout.)
+
+[Unit]
+Description=tmux agent-bridge
+After=network.target
+
+[Service]
+ExecStart=/ABSOLUTE/PATH/TO/bun run /ABSOLUTE/PATH/TO/server/bridge.ts
+WorkingDirectory=/ABSOLUTE/PATH/TO/server
+Restart=always
+RestartSec=2
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

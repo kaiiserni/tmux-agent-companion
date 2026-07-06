@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "TMUX Agent Dashboard",
+    "slug": "tmux-agent-companion",
+    "owner": "kaiiserni",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.kaiiserni.tmuxagentcompanion",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a10",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#1a1b26"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "72ddd19b-ecdd-4e79-bdda-83831a03748d"
+      }
+    }
+  }
+}
