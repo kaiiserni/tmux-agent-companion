@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { cpus, freemem, homedir, loadavg, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import type { Overview, OverviewProject } from "./types";
@@ -441,6 +441,69 @@ function capture(paneId: string, lines: number): string {
     .replace(/\n+$/, "");
 }
 
+// --- system stats + Claude usage ---------------------------------------------
+
+function cpuSnapshot() {
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus()) {
+    for (const t of Object.values(c.times)) total += t;
+    idle += c.times.idle;
+  }
+  return { idle, total };
+}
+
+// Sample twice ~200ms apart so the % is self-contained per request (no shared state).
+async function cpuPercent(): Promise<number> {
+  const a = cpuSnapshot();
+  await new Promise((r) => setTimeout(r, 200));
+  const b = cpuSnapshot();
+  const dt = b.total - a.total;
+  const di = b.idle - a.idle;
+  return dt <= 0 ? 0 : Math.max(0, Math.min(100, Math.round((1 - di / dt) * 100)));
+}
+
+function memStats() {
+  const total = totalmem();
+  // macOS freemem() undercounts (excludes cached/inactive); vm_stat gives a realistic
+  // "used" (active + wired + compressed), matching Activity Monitor / the tmux-cpu bar.
+  if (process.platform === "darwin") {
+    try {
+      const out = Bun.spawnSync(["vm_stat"]).stdout.toString();
+      const ps = Number(out.match(/page size of (\d+) bytes/)?.[1] ?? 16384);
+      const pages = (re: RegExp) => Number(out.match(re)?.[1] ?? 0) * ps;
+      const used = pages(/Pages active:\s+(\d+)/) + pages(/Pages wired down:\s+(\d+)/) + pages(/Pages occupied by compressor:\s+(\d+)/);
+      if (used > 0) return { used, total, percent: Math.round((used / total) * 100) };
+    } catch {
+      /* fall through to os */
+    }
+  }
+  const used = total - freemem();
+  return { used, total, percent: Math.round((used / total) * 100) };
+}
+
+async function systemStats() {
+  return { cpu: await cpuPercent(), mem: memStats(), load: loadavg().map((n) => Math.round(n * 100) / 100) };
+}
+
+const USAGE_RAW = "/tmp/claude-usage-raw.json";
+function claudeUsage() {
+  const pick = (o: { utilization?: number; resets_at?: string } | undefined) =>
+    o ? { utilization: o.utilization ?? null, resets_at: o.resets_at ?? null } : null;
+  try {
+    const j = JSON.parse(readFileSync(USAGE_RAW, "utf8"));
+    return {
+      updated_at: Math.floor(statSync(USAGE_RAW).mtimeMs / 1000),
+      plan: j.subscription_type ?? j.plan ?? null,
+      five_hour: pick(j.five_hour),
+      seven_day: pick(j.seven_day),
+      seven_day_opus: pick(j.seven_day_opus),
+    };
+  } catch {
+    return { updated_at: 0, plan: null, five_hour: null, seven_day: null, seven_day_opus: null };
+  }
+}
+
 // --- answering (send-keys) ---------------------------------------------------
 
 // Parse a Claude Code choice menu from a capture-pane frame: numbered "N. label"
@@ -611,6 +674,9 @@ Bun.serve({
         screen,
       });
     }
+
+    if (req.method === "GET" && path === "/system") return json(await systemStats());
+    if (req.method === "GET" && path === "/claude-usage") return json(claudeUsage());
 
     if (req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as {

@@ -1,7 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import { ActivityIndicator, Pressable, RefreshControl, SectionList, StyleSheet, Text, View } from 'react-native';
 import type { Counts } from '../api';
-import { Empty, ErrorBanner, PaneRow, TmuxBanner, TopBar } from '../components';
+import { Empty, ErrorBanner, PaneRow, StatsStrip, TmuxBanner, TopBar } from '../components';
 import { useApp } from '../context';
 import { useManualRefresh, usePanes, useRecentActivity } from '../hooks';
 import type { RootNav } from '../navigation';
@@ -70,6 +70,7 @@ export function SummaryScreen() {
       <ErrorBanner show={panes.isError} text="Can't reach the bridge - check VPN and settings." />
       <TmuxBanner tmux={panes.data?.tmux} />
       {panes.data ? <Counters counts={panes.data.counts} /> : null}
+      <StatsStrip />
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.pane_id}

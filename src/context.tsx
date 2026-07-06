@@ -7,6 +7,8 @@ export interface Prefs {
   sortByActivity: boolean;
   respondedNewestFirst: boolean;
   soundAlerts: boolean;
+  showSystemStats: boolean;
+  showClaudeUsage: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -15,6 +17,8 @@ const DEFAULT_PREFS: Prefs = {
   sortByActivity: true,
   respondedNewestFirst: true,
   soundAlerts: true,
+  showSystemStats: true,
+  showClaudeUsage: true,
 };
 
 interface AppContextValue {

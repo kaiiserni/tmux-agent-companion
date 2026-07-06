@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 import {
   getActivity,
+  getClaudeUsage,
   getOverviewFull,
   getPanes,
+  getSystem,
   getPrompt,
   getRecentActivity,
   getScreen,
@@ -104,6 +106,26 @@ export function usePrompt(paneId: string, enabled: boolean, intervalMs: number =
     queryFn: () => getPrompt(baseUrl, paneId),
     refetchInterval: intervalMs,
     enabled: !!baseUrl && !!paneId && enabled,
+  });
+}
+
+export function useSystem(enabled: boolean) {
+  const { baseUrl } = useApp();
+  return useQuery({
+    queryKey: ['system', baseUrl],
+    queryFn: () => getSystem(baseUrl),
+    refetchInterval: 5_000,
+    enabled: enabled && !!baseUrl,
+  });
+}
+
+export function useClaudeUsage(enabled: boolean) {
+  const { baseUrl } = useApp();
+  return useQuery({
+    queryKey: ['claudeUsage', baseUrl],
+    queryFn: () => getClaudeUsage(baseUrl),
+    refetchInterval: 30_000,
+    enabled: enabled && !!baseUrl,
   });
 }
 

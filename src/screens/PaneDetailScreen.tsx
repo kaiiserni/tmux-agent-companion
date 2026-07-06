@@ -215,27 +215,29 @@ export function PaneDetailScreen() {
           <Text style={{ color: colors.waiting, fontFamily: font.semibold, fontSize: 12, marginBottom: 6 }}>
             ◐ {prompt.data?.wait_reason ?? 'waiting'} - choose:
           </Text>
-          {options.map((o) => (
-            <Pressable
-              key={o.num}
-              disabled={actions.answer.isPending}
-              onPress={() => {
-                hapticSelect();
-                actions.answer.mutate({ id: paneId, key: String(o.num) });
-                goFast();
-              }}
-              style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
-            >
-              <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
-                <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
-              </Text>
-              {o.description ? (
-                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
-                  {o.description}
+          <ScrollView style={styles.decisionScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+            {options.map((o) => (
+              <Pressable
+                key={o.num}
+                disabled={actions.answer.isPending}
+                onPress={() => {
+                  hapticSelect();
+                  actions.answer.mutate({ id: paneId, key: String(o.num) });
+                  goFast();
+                }}
+                style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
+              >
+                <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
+                  <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
                 </Text>
-              ) : null}
-            </Pressable>
-          ))}
+                {o.description ? (
+                  <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
+                    {o.description}
+                  </Text>
+                ) : null}
+              </Pressable>
+            ))}
+          </ScrollView>
           <Pressable
             onPress={() => {
               actions.answer.mutate({ id: paneId, key: 'esc' });
@@ -346,7 +348,7 @@ export function PaneDetailScreen() {
         )
       ) : null}
       </ScrollView>
-      {isClaude && detailTab === 'conversation' ? (
+      {isClaude && detailTab !== 'activity' ? (
         <View>
           {actions.send.isError ? (
             <Text style={[styles.replyError, { color: colors.attention, fontFamily: font.regular }]}>
@@ -421,6 +423,7 @@ const styles = StyleSheet.create({
   wait: { fontSize: 13, marginTop: 8 },
   needs: { fontSize: 13, marginTop: 8, lineHeight: 18 },
   decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginTop: 12 },
+  decisionScroll: { maxHeight: 300 },
   option: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6 },
   escBtn: { paddingVertical: 6, alignItems: 'center' },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' },

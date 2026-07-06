@@ -20,6 +20,8 @@ const PREF_LABELS: Record<keyof Prefs, string> = {
   sortByActivity: 'Sort by activity',
   respondedNewestFirst: 'Responded newest first',
   soundAlerts: 'Sound alerts',
+  showSystemStats: 'CPU / memory bar',
+  showClaudeUsage: 'Claude usage bar',
 };
 
 export function SettingsScreen({

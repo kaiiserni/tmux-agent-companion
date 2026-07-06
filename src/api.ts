@@ -131,6 +131,25 @@ export const getTranscript = (b: string, paneId: string, limit = 40) =>
 export const getScreen = (b: string, paneId: string) =>
   get<{ pane_id: string; text: string }>(b, `/screen?pane_id=${encodeURIComponent(paneId)}`);
 
+export interface SystemStats {
+  cpu: number;
+  mem: { used: number; total: number; percent: number };
+  load: number[];
+}
+export interface UsageWindow {
+  utilization: number | null;
+  resets_at: string | null;
+}
+export interface ClaudeUsage {
+  updated_at: number;
+  plan: string | null;
+  five_hour: UsageWindow | null;
+  seven_day: UsageWindow | null;
+  seven_day_opus: UsageWindow | null;
+}
+export const getSystem = (b: string) => get<SystemStats>(b, '/system');
+export const getClaudeUsage = (b: string) => get<ClaudeUsage>(b, '/claude-usage');
+
 export interface PromptState {
   pane_id: string;
   agent: string;
