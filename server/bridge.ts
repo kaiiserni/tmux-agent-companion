@@ -673,7 +673,7 @@ var th={background:'#1a1b26',foreground:'#c0caf5',cursor:'#c0caf5',selectionBack
 var term=new Terminal({fontFamily:'SauceCodePro, Menlo, Monaco, monospace',fontSize:12,theme:th,cursorBlink:true,allowProposedApi:true,scrollback:3000});
 var FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
 var fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));
-var ctrl=false, alt=false;
+var ctrl=false, alt=false, mouse=false;
 function wsurl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/terminal?pane_id='+encodeURIComponent(params.get('pane_id')||'')+'&token='+encodeURIComponent(params.get('token')||'')+'&cols='+term.cols+'&rows='+term.rows;}
 var ws;
 function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
@@ -698,6 +698,7 @@ Array.prototype.forEach.call(document.querySelectorAll('#bar button'),function(b
     if(k){input(KEYS[k]);term.focus();}
     else if(m==='ctrl'){ctrl=!ctrl;syncMods();term.focus();}
     else if(m==='alt'){alt=!alt;syncMods();term.focus();}
+    else if(b.id==='bmouse'){mouse=!mouse;send({t:'m',c:mouse?1:0});b.className=mouse?'on':'';term.focus();}
     else if(b.id==='bzoom'){send({t:'z'});term.focus();}
     else if(b.id==='bfdn'){fontDelta(-1);}
     else if(b.id==='bfup'){fontDelta(1);}
@@ -714,7 +715,7 @@ const TERM_BAR =
   '<button data-k=cc>^C</button><button data-k=cd>^D</button><button data-k=cz>^Z</button>' +
   '<button data-k=home>home</button><button data-k=end>end</button><button data-k=pgup>pgup</button><button data-k=pgdn>pgdn</button>' +
   '<button data-k=pipe>|</button><button data-k=tilde>~</button><button data-k=slash>/</button><button data-k=dash>-</button>' +
-  '<button id=bzoom>⛶ zoom</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
+  '<button id=bmouse>🖱 mouse</button><button id=bzoom>⛶ zoom</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
   '</div>';
 
 const TERM_STYLE =
@@ -916,6 +917,7 @@ Bun.serve<TermData>({
       // Hide the tmux status bar / plugins on the phone (per-session, so the real
       // client keeps its bar). The phone then shows just the pane's window content.
       tmux(["set-option", "-t", termSession, "status", "off"]);
+      tmux(["set-option", "-t", termSession, "mouse", "off"]); // default: smooth xterm scroll; the mouse button toggles it
       if (d.winIndex) tmux(["select-window", "-t", `${termSession}:${d.winIndex}`]);
       const child = Bun.spawn([NODE_BIN, PTY_BRIDGE, termSession, String(d.cols), String(d.rows)], {
         stdin: "pipe",
@@ -950,6 +952,7 @@ Bun.serve<TermData>({
       if (m.t === "i" && typeof m.d === "string") writeFrame(d.child, 0, Buffer.from(m.d, "utf8"));
       else if (m.t === "r") writeFrame(d.child, 1, Buffer.from(`${m.c ?? 80},${m.r ?? 24}`));
       else if (m.t === "z") tmux(["resize-pane", "-Z", "-t", d.paneId]); // user-initiated zoom toggle
+      else if (m.t === "m" && d.termSession) tmux(["set-option", "-t", d.termSession, "mouse", m.c ? "on" : "off"]);
     },
     close(ws) {
       const d = ws.data;
