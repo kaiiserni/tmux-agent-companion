@@ -251,9 +251,9 @@ export function PaneDetailScreen() {
             ◐ {prompt.data?.wait_reason ?? 'waiting'} - choose:
           </Text>
           <ScrollView style={styles.decisionScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-            {options.map((o) => (
+            {options.map((o, i) => (
               <Pressable
-                key={o.num}
+                key={`opt-${i}`}
                 disabled={actions.answer.isPending}
                 onPress={() => {
                   hapticSelect();

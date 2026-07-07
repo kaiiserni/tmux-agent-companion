@@ -525,7 +525,14 @@ function parseMenu(text: string): { num: number; label: string; description: str
     }
     out.push({ num: Number(m[1]), label: m[2]!, description: desc.join(" ") });
   }
-  return out;
+  // Several numbered blocks can be on screen (e.g. a plan's "1. 2. 3." bullets AND
+  // the actual choice menu). The interactive one is the last block — where the
+  // numbering restarts. Keep only that, so answering isn't ambiguous.
+  let start = 0;
+  for (let i = 1; i < out.length; i++) {
+    if (out[i]!.num <= out[i - 1]!.num) start = i;
+  }
+  return out.slice(start);
 }
 
 function sendText(paneId: string, text: string) {
@@ -906,6 +913,9 @@ Bun.serve<TermData>({
       // so attaching from the phone doesn't move or shrink Kai's real tmux client.
       tmux(["new-session", "-d", "-s", termSession, "-t", d.session]);
       tmux(["set-option", "-t", termSession, "destroy-unattached", "off"]);
+      // Hide the tmux status bar / plugins on the phone (per-session, so the real
+      // client keeps its bar). The phone then shows just the pane's window content.
+      tmux(["set-option", "-t", termSession, "status", "off"]);
       if (d.winIndex) tmux(["select-window", "-t", `${termSession}:${d.winIndex}`]);
       const child = Bun.spawn([NODE_BIN, PTY_BRIDGE, termSession, String(d.cols), String(d.rows)], {
         stdin: "pipe",
