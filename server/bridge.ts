@@ -660,22 +660,63 @@ function readVendor(p: string): string {
 }
 
 const TERM_BOOTSTRAP = `
-const params=new URLSearchParams(location.search);
-const th={background:'#1a1b26',foreground:'#c0caf5',cursor:'#c0caf5',selectionBackground:'#33467c',black:'#15161e',red:'#f7768e',green:'#9ece6a',yellow:'#e0af68',blue:'#7aa2f7',magenta:'#bb9af7',cyan:'#7dcfff',white:'#c0caf5',brightBlack:'#414868',brightRed:'#f7768e',brightGreen:'#9ece6a',brightYellow:'#e0af68',brightBlue:'#7aa2f7',brightMagenta:'#bb9af7',brightCyan:'#7dcfff',brightWhite:'#c0caf5'};
-const term=new Terminal({fontFamily:'Menlo,Monaco,monospace',fontSize:13,theme:th,cursorBlink:true,allowProposedApi:true});
-const FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
-const fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));fit.fit();
-var ws;
+var ESC=String.fromCharCode(27), CRLF=String.fromCharCode(13,10);
+var params=new URLSearchParams(location.search);
+var th={background:'#1a1b26',foreground:'#c0caf5',cursor:'#c0caf5',selectionBackground:'#33467c',black:'#15161e',red:'#f7768e',green:'#9ece6a',yellow:'#e0af68',blue:'#7aa2f7',magenta:'#bb9af7',cyan:'#7dcfff',white:'#c0caf5',brightBlack:'#414868',brightRed:'#f7768e',brightGreen:'#9ece6a',brightYellow:'#e0af68',brightBlue:'#7aa2f7',brightMagenta:'#bb9af7',brightCyan:'#7dcfff',brightWhite:'#c0caf5'};
+var term=new Terminal({fontFamily:'SauceCodePro, Menlo, Monaco, monospace',fontSize:12,theme:th,cursorBlink:true,allowProposedApi:true,scrollback:3000});
+var FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
+var fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));
+var ctrl=false, alt=false;
 function wsurl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/terminal?pane_id='+encodeURIComponent(params.get('pane_id')||'')+'&token='+encodeURIComponent(params.get('token')||'')+'&cols='+term.cols+'&rows='+term.rows;}
-function doFit(){try{fit.fit();}catch(e){}if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'r',c:term.cols,r:term.rows}));}
+var ws;
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
+function input(d){send({t:'i',d:d});}
+function doFit(){try{fit.fit();}catch(e){}send({t:'r',c:term.cols,r:term.rows});}
 function connect(){ws=new WebSocket(wsurl());ws.binaryType='arraybuffer';
   ws.onopen=function(){doFit();term.focus();};
   ws.onmessage=function(e){term.write(typeof e.data==='string'?e.data:new Uint8Array(e.data));};
-  ws.onclose=function(){term.write('\\r\\n\\x1b[38;5;210m[disconnected \\u2014 reconnecting]\\x1b[0m\\r\\n');setTimeout(connect,1500);};
+  ws.onclose=function(){term.write(CRLF+'[disconnected - reconnecting]'+CRLF);setTimeout(connect,1500);};
 }
-term.onData(function(d){if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:'i',d:d}));});
+function syncMods(){document.getElementById('bctrl').className=ctrl?'on':'';document.getElementById('balt').className=alt?'on':'';}
+term.onData(function(d){
+  if(alt){d=ESC+d;alt=false;syncMods();}
+  if(ctrl){var c=d.charCodeAt(0);if(c>=97&&c<=122)d=String.fromCharCode(c-96)+d.slice(1);else if(c>=64&&c<=95)d=String.fromCharCode(c-64)+d.slice(1);ctrl=false;syncMods();}
+  input(d);
+});
+var KEYS={esc:ESC,tab:String.fromCharCode(9),up:ESC+'[A',down:ESC+'[B',left:ESC+'[D',right:ESC+'[C',cc:String.fromCharCode(3),cd:String.fromCharCode(4),cz:String.fromCharCode(26),home:ESC+'[H',end:ESC+'[F',pgup:ESC+'[5~',pgdn:ESC+'[6~',pipe:'|',tilde:'~',slash:'/',dash:'-'};
+function fontDelta(n){term.options.fontSize=Math.max(8,Math.min(20,term.options.fontSize+n));doFit();term.focus();}
+Array.prototype.forEach.call(document.querySelectorAll('#bar button'),function(b){
+  b.addEventListener('click',function(ev){ev.preventDefault();
+    var k=b.getAttribute('data-k'),m=b.getAttribute('data-mod');
+    if(k){input(KEYS[k]);term.focus();}
+    else if(m==='ctrl'){ctrl=!ctrl;syncMods();term.focus();}
+    else if(m==='alt'){alt=!alt;syncMods();term.focus();}
+    else if(b.id==='bzoom'){send({t:'z'});term.focus();}
+    else if(b.id==='bfdn'){fontDelta(-1);}
+    else if(b.id==='bfup'){fontDelta(1);}
+  });
+});
 window.addEventListener('resize',doFit);connect();
 `;
+
+const TERM_BAR =
+  '<div id=bar>' +
+  '<button data-k=esc>esc</button><button data-k=tab>tab</button>' +
+  '<button id=bctrl data-mod=ctrl>ctrl</button><button id=balt data-mod=alt>alt</button>' +
+  '<button data-k=up>↑</button><button data-k=down>↓</button><button data-k=left>←</button><button data-k=right>→</button>' +
+  '<button data-k=cc>^C</button><button data-k=cd>^D</button><button data-k=cz>^Z</button>' +
+  '<button data-k=home>home</button><button data-k=end>end</button><button data-k=pgup>pgup</button><button data-k=pgdn>pgdn</button>' +
+  '<button data-k=pipe>|</button><button data-k=tilde>~</button><button data-k=slash>/</button><button data-k=dash>-</button>' +
+  '<button id=bzoom>⛶ zoom</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
+  '</div>';
+
+const TERM_STYLE =
+  "html,body{margin:0;height:100%;background:#1a1b26;overflow:hidden}" +
+  "body{display:flex;flex-direction:column}#t{flex:1;min-height:0;padding:2px}" +
+  "#bar{display:flex;gap:6px;padding:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#15161e;border-top:1px solid #414868;flex:none}" +
+  "#bar button{flex:none;font:600 13px/1 SauceCodePro,Menlo,monospace;color:#a9b1d6;background:#24283b;border:1px solid #414868;border-radius:7px;padding:9px 11px;min-width:34px}" +
+  "#bar button.on{color:#1a1b26;background:#7aa2f7;border-color:#7aa2f7}" +
+  "@font-face{font-family:'SauceCodePro';src:url('/term-font.ttf') format('truetype');font-display:swap}";
 
 function buildTermHtml(): string {
   const css = readVendor(join(XTERM_DIR, "xterm/css/xterm.css"));
@@ -684,13 +725,14 @@ function buildTermHtml(): string {
   return (
     "<!doctype html><html><head><meta charset=utf-8>" +
     '<meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">' +
-    "<style>" + css + "\nhtml,body{margin:0;height:100%;background:#1a1b26;overflow:hidden}#t{height:100%;width:100%}</style>" +
-    "</head><body><div id=t></div>" +
+    "<style>" + css + "\n" + TERM_STYLE + "</style>" +
+    "</head><body><div id=t></div>" + TERM_BAR +
     "<script>" + xterm + "</script><script>" + fit + "</script>" +
     "<script>" + TERM_BOOTSTRAP + "</script></body></html>"
   );
 }
 const TERM_HTML = buildTermHtml();
+const TERM_FONT = join(import.meta.dir, "../assets/fonts/SauceCodeProNerdFont-Regular.ttf");
 
 function htmlResponse(html: string): Response {
   return new Response(html, {
@@ -731,6 +773,15 @@ Bun.serve<TermData>({
 
     // The xterm.js web UI. Open (no data of its own); the WS it opens is token-gated.
     if (req.method === "GET" && path === "/term") return htmlResponse(TERM_HTML);
+    if (req.method === "GET" && path === "/term-font.ttf") {
+      try {
+        return new Response(readFileSync(TERM_FONT), {
+          headers: { "Content-Type": "font/ttf", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=86400" },
+        });
+      } catch {
+        return new Response("", { status: 404 });
+      }
+    }
 
     // Everything else is token-gated: the read endpoints carry CONFIDENTIAL
     // cross-client agent data, so LAN reachability alone must not grant access.
@@ -888,6 +939,7 @@ Bun.serve<TermData>({
       }
       if (m.t === "i" && typeof m.d === "string") writeFrame(d.child, 0, Buffer.from(m.d, "utf8"));
       else if (m.t === "r") writeFrame(d.child, 1, Buffer.from(`${m.c ?? 80},${m.r ?? 24}`));
+      else if (m.t === "z") tmux(["resize-pane", "-Z", "-t", d.paneId]); // user-initiated zoom toggle
     },
     close(ws) {
       const d = ws.data;
