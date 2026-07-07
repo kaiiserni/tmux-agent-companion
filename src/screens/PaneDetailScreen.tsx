@@ -1,5 +1,5 @@
 import type { RouteProp } from '@react-navigation/native';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -176,6 +176,12 @@ export function PaneDetailScreen() {
   const transcript = useTranscript(paneId, fast ? LIVE_POLL : 12000);
   const activity = useActivity(paneId);
   const [detailTab, setDetailTab] = useState<'conversation' | 'screen' | 'activity' | 'terminal'>('conversation');
+  const [termFull, setTermFull] = useState(false);
+  const navigation = useNavigation();
+  const fullscreen = detailTab === 'terminal' && termFull;
+  useEffect(() => {
+    navigation.setOptions({ headerShown: !fullscreen });
+  }, [navigation, fullscreen]);
   const screen = useScreen(paneId, detailTab === 'screen');
   const actions = usePaneActions();
   const kbHeight = useKeyboardHeight();
@@ -219,6 +225,7 @@ export function PaneDetailScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingBottom: kbHeight }}>
+      {fullscreen ? null : (
       <View style={styles.staticTop}>
       {/* header */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -319,8 +326,18 @@ export function PaneDetailScreen() {
         ))}
       </View>
       </View>
+      )}
       {detailTab === 'terminal' ? (
-        <TerminalView paneId={paneId} />
+        <View style={{ flex: 1 }}>
+          <TerminalView paneId={paneId} />
+          <Pressable
+            onPress={() => setTermFull((v) => !v)}
+            hitSlop={10}
+            style={[styles.termFullBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, top: fullscreen ? insets.top + 6 : 6 }]}
+          >
+            <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>{fullscreen ? '⤡' : '⤢'}</Text>
+          </Pressable>
+        </View>
       ) : (
       <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
@@ -464,6 +481,7 @@ const styles = StyleSheet.create({
   decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginTop: 12 },
   decisionScroll: { maxHeight: 300 },
   termCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  termFullBtn: { position: 'absolute', right: 8, width: 34, height: 34, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', opacity: 0.85 },
   option: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6 },
   escBtn: { paddingVertical: 6, alignItems: 'center' },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' },
