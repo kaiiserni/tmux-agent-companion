@@ -10,6 +10,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { TopBar } from '../components';
 import { getToken, setToken as persistToken } from '../config';
 import { useApp, type Prefs } from '../context';
 import { useTheme } from '../theme/ThemeProvider';
@@ -35,6 +37,7 @@ export function SettingsScreen({
 }) {
   const { colors, font } = useTheme();
   const { prefs, togglePref } = useApp();
+  const insets = useSafeAreaInsets();
   const [url, setUrl] = useState(initialUrl);
   const [token, setToken] = useState('');
 
@@ -52,9 +55,13 @@ export function SettingsScreen({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1, backgroundColor: colors.bg }}
     >
-      <ScrollView contentContainerStyle={styles.inner}>
-        <Text style={[styles.title, { color: colors.text, fontFamily: font.bold }]}>Settings</Text>
-
+      {/* modal presentation has a native header; only the first-run standalone needs its own */}
+      {onClose ? null : (
+        <View style={{ paddingTop: insets.top, backgroundColor: colors.deepest }}>
+          <TopBar title="Settings" />
+        </View>
+      )}
+      <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <Text style={[styles.label, { color: colors.dim, fontFamily: font.medium }]}>Bridge URL</Text>
         <Text style={[styles.hint, { color: colors.muted, fontFamily: font.regular }]}>
           The agent-bridge on your dev-box, over LAN/WireGuard.
@@ -116,8 +123,7 @@ export function SettingsScreen({
 }
 
 const styles = StyleSheet.create({
-  inner: { padding: 20, paddingTop: 60, gap: 8 },
-  title: { fontSize: 24, marginBottom: 12 },
+  inner: { padding: 20, paddingTop: 12, gap: 8 },
   label: { fontSize: 13, marginTop: 12 },
   hint: { fontSize: 12, lineHeight: 16, marginBottom: 4 },
   input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 14, fontSize: 15 },

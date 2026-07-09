@@ -227,6 +227,9 @@ export function PaneDetailScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingBottom: kbHeight }}>
       {fullscreen ? null : (
       <View style={styles.staticTop}>
+      {/* terminal tab is compact: only the tab bar, all room for the terminal */}
+      {detailTab === 'terminal' ? null : (
+      <>
       {/* header */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.headRow}>
@@ -258,9 +261,9 @@ export function PaneDetailScreen() {
             ◐ {prompt.data?.wait_reason ?? 'waiting'} - choose:
           </Text>
           <ScrollView style={styles.decisionScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-            {options.map((o, i) => (
+            {options.map((o) => (
               <Pressable
-                key={`opt-${i}`}
+                key={`${o.num}:${o.label}`}
                 disabled={actions.answer.isPending}
                 onPress={() => {
                   hapticSelect();
@@ -310,13 +313,18 @@ export function PaneDetailScreen() {
         <ActionButton label="Clear" color={colors.waiting} busy={actions.clear.isPending} onPress={() => actions.clear.mutate(paneId)} />
         <ActionButton label="Jump" color={colors.running} busy={actions.goto.isPending} onPress={confirmGoto} />
       </View>
+      </>
+      )}
 
       {/* tabs */}
       <View style={styles.tabBar}>
         {(['conversation', 'screen', 'activity', 'terminal'] as const).map((t) => (
           <Pressable
             key={t}
-            onPress={() => setDetailTab(t)}
+            onPress={() => {
+              setDetailTab(t);
+              if (t !== 'terminal') setTermFull(false);
+            }}
             style={[styles.tab, { borderColor: detailTab === t ? colors.accent : colors.border, backgroundColor: detailTab === t ? colors.surfaceAlt : 'transparent' }]}
           >
             <Text style={{ color: detailTab === t ? colors.accent : colors.muted, fontFamily: font.medium, fontSize: 12 }}>
@@ -328,10 +336,13 @@ export function PaneDetailScreen() {
       </View>
       )}
       {detailTab === 'terminal' ? (
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, paddingTop: fullscreen ? insets.top : 0 }}>
           <TerminalView paneId={paneId} />
           <Pressable
-            onPress={() => setTermFull((v) => !v)}
+            onPress={() => {
+              hapticTap();
+              setTermFull((v) => !v);
+            }}
             hitSlop={10}
             style={[styles.termFullBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, top: fullscreen ? insets.top + 6 : 6 }]}
           >

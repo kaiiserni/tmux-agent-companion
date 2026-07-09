@@ -43,7 +43,9 @@ export function buildSummarySections(panes: Pane[], prefs: Prefs) {
   const sorter = prefs.sortByActivity ? byRecency : byName;
   return order
     .map((key) => {
-      let data = panes.filter((p) => inSection(p, key)).sort(sorter);
+      // Dedupe by pane_id: the bridge should never send duplicates, but a stray
+      // duplicate row would crash the SectionList key invariant.
+      let data = [...new Map(panes.filter((p) => inSection(p, key)).map((p) => [p.pane_id, p])).values()].sort(sorter);
       if (key === 'responded' && !prefs.respondedNewestFirst) data = data.reverse();
       return { key, title: SUMMARY_TITLES[key], data };
     })

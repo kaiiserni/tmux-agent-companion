@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { cpus, freemem, homedir, loadavg, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
+import { parseMenu } from "./menu";
 import type { Overview, OverviewProject } from "./types";
 
 // Read/write bridge between the live tmux fleet and the companion app. Mirrors the
@@ -156,7 +157,9 @@ function parseLivePaneLine(line: string): LivePane | null {
 }
 
 function collectLive(): LivePane[] | null {
-  const { ok, out } = tmux(["list-panes", "-a", "-F", LIST_FORMAT]);
+  // Exclude grouped term_* sessions: they share windows with the real session,
+  // so list-panes -a would list every shared pane twice (with the wrong target).
+  const { ok, out } = tmux(["list-panes", "-a", "-f", "#{==:#{m:term_*,#{session_name}},0}", "-F", LIST_FORMAT]);
   if (!ok) return null; // no tmux server
   const panes: LivePane[] = [];
   for (const line of out.trimEnd().split("\n")) {
@@ -506,35 +509,6 @@ function claudeUsage() {
 
 // --- answering (send-keys) ---------------------------------------------------
 
-// Parse a Claude Code choice menu from a capture-pane frame: numbered "N. label"
-// rows (the marker ❯/▶/> may prefix the selected one), plus any indented
-// continuation lines beneath an option as its description (AskUserQuestion etc.).
-function parseMenu(text: string): { num: number; label: string; description: string }[] {
-  const lines = text.split("\n");
-  const numbered = /^\s*[❯▶>]?\s*(\d+)\.\s+(.+?)\s*$/;
-  const footer = /^\s*(esc|enter|tab|ctrl|↵|⏎|space)\b/i;
-  const out: { num: number; label: string; description: string }[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(numbered);
-    if (!m) continue;
-    const desc: string[] = [];
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j]!;
-      if (numbered.test(l) || footer.test(l) || !l.trim()) break;
-      desc.push(l.trim());
-    }
-    out.push({ num: Number(m[1]), label: m[2]!, description: desc.join(" ") });
-  }
-  // Several numbered blocks can be on screen (e.g. a plan's "1. 2. 3." bullets AND
-  // the actual choice menu). The interactive one is the last block — where the
-  // numbering restarts. Keep only that, so answering isn't ambiguous.
-  let start = 0;
-  for (let i = 1; i < out.length; i++) {
-    if (out[i]!.num <= out[i - 1]!.num) start = i;
-  }
-  return out.slice(start);
-}
-
 function sendText(paneId: string, text: string) {
   tmux(["send-keys", "-t", paneId, "-l", text]);
   tmux(["send-keys", "-t", paneId, "Enter"]);
@@ -673,6 +647,7 @@ var th={background:'#1a1b26',foreground:'#c0caf5',cursor:'#c0caf5',selectionBack
 var term=new Terminal({fontFamily:'SauceCodePro, Menlo, Monaco, monospace',fontSize:12,theme:th,cursorBlink:true,allowProposedApi:true,scrollback:3000});
 var FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
 var fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));
+try{fit.fit();}catch(e){}
 var ctrl=false, alt=false, mouse=false;
 function wsurl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/terminal?pane_id='+encodeURIComponent(params.get('pane_id')||'')+'&token='+encodeURIComponent(params.get('token')||'')+'&cols='+term.cols+'&rows='+term.rows;}
 var ws;
@@ -680,28 +655,31 @@ function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
 function input(d){send({t:'i',d:d});}
 function doFit(){try{fit.fit();}catch(e){}send({t:'r',c:term.cols,r:term.rows});}
 function connect(){ws=new WebSocket(wsurl());ws.binaryType='arraybuffer';
-  ws.onopen=function(){doFit();term.focus();};
+  ws.onopen=function(){doFit();send({t:'m',c:mouse?1:0});term.focus();};
   ws.onmessage=function(e){term.write(typeof e.data==='string'?e.data:new Uint8Array(e.data));};
   ws.onclose=function(){term.write(CRLF+'[disconnected - reconnecting]'+CRLF);setTimeout(connect,1500);};
 }
 function syncMods(){document.getElementById('bctrl').className=ctrl?'on':'';document.getElementById('balt').className=alt?'on':'';}
-term.onData(function(d){
-  if(alt){d=ESC+d;alt=false;syncMods();}
-  if(ctrl){var c=d.charCodeAt(0);if(c>=97&&c<=122)d=String.fromCharCode(c-96)+d.slice(1);else if(c>=64&&c<=95)d=String.fromCharCode(c-64)+d.slice(1);ctrl=false;syncMods();}
-  input(d);
-});
+// ctrl transforms the raw first char; alt prefixes ESC afterwards, so ctrl+alt composes.
+function applyMods(d){
+  if(ctrl){var c=d.charCodeAt(0);if(c>=97&&c<=122)d=String.fromCharCode(c-96)+d.slice(1);else if(c>=64&&c<=95)d=String.fromCharCode(c-64)+d.slice(1);}
+  if(alt)d=ESC+d;
+  if(ctrl||alt){ctrl=false;alt=false;syncMods();}
+  return d;
+}
+term.onData(function(d){input(applyMods(d));});
 var KEYS={esc:ESC,tab:String.fromCharCode(9),up:ESC+'[A',down:ESC+'[B',left:ESC+'[D',right:ESC+'[C',cc:String.fromCharCode(3),cd:String.fromCharCode(4),cz:String.fromCharCode(26),home:ESC+'[H',end:ESC+'[F',pgup:ESC+'[5~',pgdn:ESC+'[6~',pipe:'|',tilde:'~',slash:'/',dash:'-'};
-function fontDelta(n){term.options.fontSize=Math.max(8,Math.min(20,term.options.fontSize+n));doFit();term.focus();}
+function fontDelta(n){term.options.fontSize=Math.max(8,Math.min(20,term.options.fontSize+n));doFit();}
 Array.prototype.forEach.call(document.querySelectorAll('#bar button'),function(b){
   b.addEventListener('click',function(ev){ev.preventDefault();
     var k=b.getAttribute('data-k'),m=b.getAttribute('data-mod');
-    if(k){input(KEYS[k]);term.focus();}
-    else if(m==='ctrl'){ctrl=!ctrl;syncMods();term.focus();}
-    else if(m==='alt'){alt=!alt;syncMods();term.focus();}
-    else if(b.id==='bmouse'){mouse=!mouse;send({t:'m',c:mouse?1:0});b.className=mouse?'on':'';term.focus();}
-    else if(b.id==='bzoom'){send({t:'z'});term.focus();}
+    if(k){input(applyMods(KEYS[k]));}
+    else if(m==='ctrl'){ctrl=!ctrl;syncMods();}
+    else if(m==='alt'){alt=!alt;syncMods();}
+    else if(b.id==='bmouse'){mouse=!mouse;send({t:'m',c:mouse?1:0});b.className=mouse?'on':'';}
     else if(b.id==='bfdn'){fontDelta(-1);}
     else if(b.id==='bfup'){fontDelta(1);}
+    term.focus();
   });
 });
 window.addEventListener('resize',doFit);connect();
@@ -715,7 +693,7 @@ const TERM_BAR =
   '<button data-k=cc>^C</button><button data-k=cd>^D</button><button data-k=cz>^Z</button>' +
   '<button data-k=home>home</button><button data-k=end>end</button><button data-k=pgup>pgup</button><button data-k=pgdn>pgdn</button>' +
   '<button data-k=pipe>|</button><button data-k=tilde>~</button><button data-k=slash>/</button><button data-k=dash>-</button>' +
-  '<button id=bmouse>🖱 mouse</button><button id=bzoom>⛶ zoom</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
+  '<button id=bmouse>🖱 mouse</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
   '</div>';
 
 const TERM_STYLE =
@@ -740,7 +718,14 @@ function buildTermHtml(): string {
   );
 }
 const TERM_HTML = buildTermHtml();
-const TERM_FONT = join(import.meta.dir, "../assets/fonts/SauceCodeProNerdFont-Regular.ttf");
+const TERM_FONT: ArrayBuffer | null = (() => {
+  try {
+    const b = readFileSync(join(import.meta.dir, "../assets/fonts/SauceCodeProNerdFont-Regular.ttf"));
+    return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+  } catch {
+    return null;
+  }
+})();
 
 function htmlResponse(html: string): Response {
   return new Response(html, {
@@ -772,8 +757,8 @@ Bun.serve<TermData>({
           paneId: live.paneId,
           session: live.session,
           winIndex,
-          cols: Number(url.searchParams.get("cols") ?? "80"),
-          rows: Number(url.searchParams.get("rows") ?? "24"),
+          cols: Math.max(20, Number(url.searchParams.get("cols") ?? "80")),
+          rows: Math.max(8, Number(url.searchParams.get("rows") ?? "24")),
         },
       });
       return ok ? undefined : json({ error: "upgrade failed" }, 400);
@@ -782,13 +767,10 @@ Bun.serve<TermData>({
     // The xterm.js web UI. Open (no data of its own); the WS it opens is token-gated.
     if (req.method === "GET" && path === "/term") return htmlResponse(TERM_HTML);
     if (req.method === "GET" && path === "/term-font.ttf") {
-      try {
-        return new Response(readFileSync(TERM_FONT), {
-          headers: { "Content-Type": "font/ttf", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=86400" },
-        });
-      } catch {
-        return new Response("", { status: 404 });
-      }
+      if (!TERM_FONT) return new Response("", { status: 404 });
+      return new Response(TERM_FONT, {
+        headers: { "Content-Type": "font/ttf", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=86400" },
+      });
     }
 
     // Everything else is token-gated: the read endpoints carry CONFIDENTIAL
@@ -910,15 +892,18 @@ Bun.serve<TermData>({
       const d = ws.data;
       const termSession = `term_${d.paneId.replace("%", "")}_${Date.now() % 100000}`;
       d.termSession = termSession;
-      // Grouped session: shares the window list but has its own size + current window,
-      // so attaching from the phone doesn't move or shrink Kai's real tmux client.
-      tmux(["new-session", "-d", "-s", termSession, "-t", d.session]);
-      tmux(["set-option", "-t", termSession, "destroy-unattached", "off"]);
-      // Hide the tmux status bar / plugins on the phone (per-session, so the real
-      // client keeps its bar). The phone then shows just the pane's window content.
-      tmux(["set-option", "-t", termSession, "status", "off"]);
-      tmux(["set-option", "-t", termSession, "mouse", "off"]); // default: smooth xterm scroll; the mouse button toggles it
-      if (d.winIndex) tmux(["select-window", "-t", `${termSession}:${d.winIndex}`]);
+      // Grouped session: own current window, but windows (and their size!) are shared —
+      // the phone drives the shared window size while attached (pty-bridge clamps ≥20x8).
+      // status off is per-session; a pane-border-status line may still show (window option).
+      const setup: string[][] = [
+        ["new-session", "-d", "-s", termSession, "-t", d.session],
+        ["set-option", "-t", termSession, "destroy-unattached", "off"],
+        ["set-option", "-t", termSession, "status", "off"],
+        ["set-option", "-t", termSession, "mouse", "off"], // mouse button toggles it
+        ["set-option", "-t", termSession, "window-size", "latest"],
+      ];
+      if (d.winIndex) setup.push(["select-window", "-t", `${termSession}:${d.winIndex}`]);
+      tmuxChain(setup);
       const child = Bun.spawn([NODE_BIN, PTY_BRIDGE, termSession, String(d.cols), String(d.rows)], {
         stdin: "pipe",
         stdout: "pipe",
@@ -951,7 +936,6 @@ Bun.serve<TermData>({
       }
       if (m.t === "i" && typeof m.d === "string") writeFrame(d.child, 0, Buffer.from(m.d, "utf8"));
       else if (m.t === "r") writeFrame(d.child, 1, Buffer.from(`${m.c ?? 80},${m.r ?? 24}`));
-      else if (m.t === "z") tmux(["resize-pane", "-Z", "-t", d.paneId]); // user-initiated zoom toggle
       else if (m.t === "m" && d.termSession) tmux(["set-option", "-t", d.termSession, "mouse", m.c ? "on" : "off"]);
     },
     close(ws) {
@@ -961,6 +945,8 @@ Bun.serve<TermData>({
       } catch {
         /* already gone */
       }
+      // After kill-session the shared window snaps back to the desktop client's
+      // size as soon as that client views it (window-size latest).
       if (d.termSession) tmux(["kill-session", "-t", d.termSession]);
       audit("terminal-close", d.paneId, d.termSession ?? "");
     },

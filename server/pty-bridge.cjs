@@ -10,10 +10,15 @@ const pty = require('node-pty');
 const [target, cols0, rows0] = process.argv.slice(2);
 const TMUX = process.env.TMUX_BIN || 'tmux';
 
+// Grouped sessions share windows: our size resizes the user's real window too.
+// Clamp so a degenerate client viewport can never crush it (seen: 53x2).
+const clampCols = (c) => Math.max(20, Number(c) || 80);
+const clampRows = (r) => Math.max(8, Number(r) || 24);
+
 const term = pty.spawn(TMUX, ['-u', 'attach', '-t', target], {
   name: 'xterm-256color',
-  cols: Number(cols0) || 80,
-  rows: Number(rows0) || 24,
+  cols: clampCols(cols0),
+  rows: clampRows(rows0),
   cwd: process.env.HOME,
   env: process.env,
 });
@@ -35,7 +40,7 @@ process.stdin.on('data', (chunk) => {
     } else if (type === 1) {
       const [c, r] = payload.toString('utf8').split(',');
       try {
-        term.resize(Number(c) || 80, Number(r) || 24);
+        term.resize(clampCols(c), clampRows(r));
       } catch {
         /* pty gone */
       }
