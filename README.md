@@ -34,7 +34,7 @@ bridge over LAN/WireGuard; no agent data leaves your machines.
   (mark seen, clear, jump, reply, answer a prompt). Runs on the machine hosting tmux.
 - **App** (repo root, Expo/React Native) - four tabs (Summary / Tiles / Overview /
   Search) + a pane detail screen with the agent conversation, live screen, activity,
-  a reply bar, and keystroke controls.
+  a full interactive terminal (xterm.js over a PTY), a reply bar, and keystroke controls.
 
 ## Requirements
 
