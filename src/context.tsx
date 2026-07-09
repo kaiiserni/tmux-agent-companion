@@ -6,6 +6,7 @@ export interface Prefs {
   technicalNames: boolean;
   sortByActivity: boolean;
   respondedNewestFirst: boolean;
+  soundAlerts: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -13,6 +14,7 @@ const DEFAULT_PREFS: Prefs = {
   technicalNames: false,
   sortByActivity: true,
   respondedNewestFirst: true,
+  soundAlerts: true,
 };
 
 interface AppContextValue {

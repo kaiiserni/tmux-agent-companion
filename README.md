@@ -6,8 +6,11 @@ reply - without opening tmux.
 
 It mirrors the [tmux-agent-dashboard](https://github.com/kaiiserni/tmux-agent-dashboard) TUI: the same
 attention/running/idle classification, tiles, and per-project overview. It adds a
-per-pane detail screen the TUI doesn't have, with the transcript as a chat, the live
-screen, the activity log, and the actions.
+per-pane detail screen the TUI doesn't have — the transcript as a chat, the live
+screen, and the activity log split into tabs. From there you reply in free text or
+by voice, answer a permission prompt, or send raw keys (insert, paste, interrupt).
+When an agent newly needs you, the app fires a local notification, a haptic tap, and
+a short sound you can switch off.
 
 Everything stays on your own network. The app talks to a small self-hosted HTTP
 bridge over LAN/WireGuard; no agent data leaves your machines.
@@ -30,7 +33,8 @@ bridge over LAN/WireGuard; no agent data leaves your machines.
   pane state and serves it to the app, and turns app requests into `tmux` commands
   (mark seen, clear, jump, reply, answer a prompt). Runs on the machine hosting tmux.
 - **App** (repo root, Expo/React Native) - four tabs (Summary / Tiles / Overview /
-  Search) + a pane detail screen with the agent conversation and actions.
+  Search) + a pane detail screen with the agent conversation, live screen, activity,
+  a reply bar, and keystroke controls.
 
 ## Requirements
 
@@ -81,8 +85,7 @@ and paste the token from `~/.config/agent-bridge/token`.
 
 ## Roadmap
 
-- Silent push wake (self-hosted APNs) so alerts arrive with the app closed -
-  needs an EAS dev build.
+- Silent push wake (self-hosted APNs) so alerts arrive with the app closed.
 - Home-screen widget / Live Activity for the top pending agent.
 - Optional smart-glasses HUD for glanceable alerts.
 

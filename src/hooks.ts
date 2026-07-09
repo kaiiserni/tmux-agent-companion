@@ -18,6 +18,8 @@ import {
 import { useApp } from './context';
 
 const POLL = 12_000;
+// Near-real-time cadence, shared by the live screen view and the post-send transcript.
+export const LIVE_POLL = 1_500;
 
 // Spinner only for a user-initiated pull, so background polls don't push the
 // list down every cycle.
@@ -90,7 +92,7 @@ export function useScreen(paneId: string, enabled: boolean) {
     queryKey: ['screen', baseUrl, paneId],
     queryFn: () => getScreen(baseUrl, paneId),
     // Near-real-time while expanded - capture-pane is cheap and only polls when open.
-    refetchInterval: 1500,
+    refetchInterval: LIVE_POLL,
     enabled: !!baseUrl && !!paneId && enabled,
   });
 }

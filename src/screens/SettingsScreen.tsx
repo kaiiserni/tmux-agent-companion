@@ -19,6 +19,7 @@ const PREF_LABELS: Record<keyof Prefs, string> = {
   technicalNames: 'Technical names',
   sortByActivity: 'Sort by activity',
   respondedNewestFirst: 'Responded newest first',
+  soundAlerts: 'Sound alerts',
 };
 
 export function SettingsScreen({

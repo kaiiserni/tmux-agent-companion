@@ -1,12 +1,16 @@
 import { useEffect, useRef } from 'react';
+import { useApp } from './context';
 import { usePanes } from './hooks';
+import { hapticWarn } from './haptics';
 import { addResponseListener, fireAttentionAlert, requestNotificationPermission } from './notifications';
+import { playAlert } from './sound';
 
 // Watches the pane poll and fires a local notification when a pane newly needs
 // attention (rising edge, deduped). Renders nothing. Piggybacks on the existing
 // usePanes query (same key → React Query dedupes, no extra polling).
 export function NotificationsController({ onOpenPane }: { onOpenPane: (paneId: string) => void }) {
   const panes = usePanes();
+  const { prefs } = useApp();
   const seen = useRef<Set<string>>(new Set());
   const primed = useRef(false);
 
@@ -26,10 +30,16 @@ export function NotificationsController({ onOpenPane }: { onOpenPane: (paneId: s
       seen.current = current;
       return;
     }
+    let fired = false;
     for (const p of attn) {
       if (!seen.current.has(p.pane_id)) {
         fireAttentionAlert(`⚠ ${p.project}`, p.needs_from_you || p.wait_reason || 'needs attention', p.pane_id);
+        fired = true;
       }
+    }
+    if (fired) {
+      if (prefs.soundAlerts) playAlert();
+      hapticWarn();
     }
     seen.current = current;
   }, [panes.data]);

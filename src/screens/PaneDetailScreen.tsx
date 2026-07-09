@@ -1,12 +1,13 @@
 import type { RouteProp } from '@react-navigation/native';
 import { useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Pane, TranscriptEntry } from '../api';
 import { ageLabel, Badge } from '../components';
 import { redact, useApp } from '../context';
-import { useActivity, usePaneActions, usePanes, usePrompt, useScreen, useTranscript } from '../hooks';
+import { hapticSelect, hapticSuccess, hapticTap, hapticWarn } from '../haptics';
+import { LIVE_POLL, useActivity, usePaneActions, usePanes, usePrompt, useScreen, useTranscript } from '../hooks';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Markdown } from '../markdown';
 import { useKeyboardHeight } from '../useKeyboardHeight';
@@ -98,7 +99,10 @@ function ActionButton({ label, color, onPress, busy }: { label: string; color: s
   const { font } = useTheme();
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => {
+        hapticTap();
+        onPress();
+      }}
       disabled={busy}
       style={({ pressed }) => [styles.action, { borderColor: color, opacity: busy ? 0.4 : pressed ? 0.6 : 1 }]}
     >
@@ -126,6 +130,7 @@ export function PaneDetailScreen() {
   const [copied, setCopied] = useState(false);
   const copy = useCallback((t: string) => {
     if (!t) return;
+    hapticTap();
     Clipboard.setStringAsync(t);
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
@@ -133,18 +138,30 @@ export function PaneDetailScreen() {
 
   const panes = usePanes();
   const pane: Pane | undefined = panes.data?.panes.find((p) => p.pane_id === paneId);
-  const transcript = useTranscript(paneId, fast ? 3000 : 12000);
+  const transcript = useTranscript(paneId, fast ? LIVE_POLL : 12000);
   const activity = useActivity(paneId);
-  const [showScreen, setShowScreen] = useState(false);
-  const screen = useScreen(paneId, showScreen);
+  const [detailTab, setDetailTab] = useState<'conversation' | 'screen' | 'activity'>('conversation');
+  const screen = useScreen(paneId, detailTab === 'screen');
   const actions = usePaneActions();
   const kbHeight = useKeyboardHeight();
   const insets = useSafeAreaInsets();
   const isClaude = pane?.agent === 'claude';
   const prompt = usePrompt(paneId, !!isClaude, fast ? 2000 : 5000);
   const [reply, setReply] = useState('');
-  const [visible, setVisible] = useState(6);
+  const [visible, setVisible] = useState(10);
   const options = prompt.data?.waiting ? prompt.data.options : [];
+
+  // Auto-scroll the conversation to the latest turn on new content / after sending.
+  const scrollRef = useRef<ScrollView>(null);
+  const lastCount = useRef(0);
+  const scrollToEnd = useCallback(() => {
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+  }, []);
+  const entryCount = transcript.data?.entries?.length ?? 0;
+  useEffect(() => {
+    if (detailTab === 'conversation' && entryCount > lastCount.current) scrollToEnd();
+    lastCount.current = entryCount;
+  }, [entryCount, detailTab, scrollToEnd]);
 
   const confirmGoto = () =>
     Alert.alert('Jump to pane', 'This switches the focused pane in your tmux session.', [
@@ -152,9 +169,22 @@ export function PaneDetailScreen() {
       { text: 'Jump', onPress: () => actions.goto.mutate(paneId) },
     ]);
 
+  const confirmInterrupt = () =>
+    Alert.alert('Interrupt agent', 'Sends Ctrl+C to this pane. It interrupts the current turn; a second one can exit the agent.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Interrupt',
+        style: 'destructive',
+        onPress: () => {
+          hapticWarn();
+          actions.answer.mutate({ id: paneId, key: 'ctrl-c' });
+        },
+      },
+    ]);
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingBottom: kbHeight }}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <View style={styles.staticTop}>
       {/* header */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.headRow}>
@@ -190,6 +220,7 @@ export function PaneDetailScreen() {
               key={o.num}
               disabled={actions.answer.isPending}
               onPress={() => {
+                hapticSelect();
                 actions.answer.mutate({ id: paneId, key: String(o.num) });
                 goFast();
               }}
@@ -236,8 +267,26 @@ export function PaneDetailScreen() {
         <ActionButton label="Jump" color={colors.running} busy={actions.goto.isPending} onPress={confirmGoto} />
       </View>
 
+      {/* tabs */}
+      <View style={styles.tabBar}>
+        {(['conversation', 'screen', 'activity'] as const).map((t) => (
+          <Pressable
+            key={t}
+            onPress={() => setDetailTab(t)}
+            style={[styles.tab, { borderColor: detailTab === t ? colors.accent : colors.border, backgroundColor: detailTab === t ? colors.surfaceAlt : 'transparent' }]}
+          >
+            <Text style={{ color: detailTab === t ? colors.accent : colors.muted, fontFamily: font.medium, fontSize: 12 }}>
+              {t === 'conversation' ? 'Conversation' : t === 'screen' ? 'Screen' : 'Activity'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      </View>
+      <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+
       {/* conversation */}
-      <Text style={[styles.sectionHeader, { color: colors.dim, fontFamily: font.semibold }]}>CONVERSATION</Text>
+      {detailTab === 'conversation' ? (
+      <>
       {transcript.isLoading ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 12 }} /> : null}
       {transcript.isError ? (
         <Text style={[styles.hint, { color: colors.attention, fontFamily: font.regular }]}>
@@ -266,16 +315,13 @@ export function PaneDetailScreen() {
           </>
         );
       })()}
+      </>
+      ) : null}
 
-      {/* live screen (collapsible) */}
-      <Pressable onPress={() => setShowScreen((v) => !v)}>
-        <Text style={[styles.sectionHeader, { color: colors.dim, fontFamily: font.semibold }]}>
-          LIVE SCREEN {showScreen ? '▾' : '▸'}
-        </Text>
-      </Pressable>
-      {showScreen ? (
+      {/* live screen */}
+      {detailTab === 'screen' ? (
         screen.isLoading ? (
-          <ActivityIndicator color={colors.accent} />
+          <ActivityIndicator color={colors.accent} style={{ marginTop: 12 }} />
         ) : (
           <ScrollView horizontal style={[styles.screenWrap, { backgroundColor: colors.deepest }]} showsHorizontalScrollIndicator>
             <Text style={[styles.screen, { color: colors.dim, fontFamily: font.regular }]}>
@@ -286,18 +332,21 @@ export function PaneDetailScreen() {
       ) : null}
 
       {/* activity */}
-      {activity.data && activity.data.activity.length > 0 ? (
-        <>
-          <Text style={[styles.sectionHeader, { color: colors.dim, fontFamily: font.semibold }]}>ACTIVITY</Text>
-          {activity.data.activity.slice(-30).reverse().map((a, i) => (
-            <Text key={i} style={[styles.actLine, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
-              <Text style={{ color: colors.dim }}>{a.time}</Text> <Text style={{ color: colors.cyan }}>{a.tool}</Text> {redact(a.label, priv)}
-            </Text>
-          ))}
-        </>
+      {detailTab === 'activity' ? (
+        activity.data && activity.data.activity.length > 0 ? (
+          <>
+            {activity.data.activity.slice(-30).reverse().map((a, i) => (
+              <Text key={i} style={[styles.actLine, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
+                <Text style={{ color: colors.dim }}>{a.time}</Text> <Text style={{ color: colors.cyan }}>{a.tool}</Text> {redact(a.label, priv)}
+              </Text>
+            ))}
+          </>
+        ) : (
+          <Text style={[styles.hint, { color: colors.muted, fontFamily: font.regular }]}>No activity yet.</Text>
+        )
       ) : null}
       </ScrollView>
-      {isClaude ? (
+      {isClaude && detailTab === 'conversation' ? (
         <View>
           {actions.send.isError ? (
             <Text style={[styles.replyError, { color: colors.attention, fontFamily: font.regular }]}>
@@ -309,6 +358,11 @@ export function PaneDetailScreen() {
               Options changed - pull to refresh and choose again.
             </Text>
           ) : null}
+          <View style={[styles.keyStrip, { backgroundColor: colors.deepest }]}>
+            <ActionButton label="i" color={colors.running} busy={actions.answer.isPending} onPress={() => actions.answer.mutate({ id: paneId, key: 'i' })} />
+            <ActionButton label="⌃V" color={colors.magenta} busy={actions.answer.isPending} onPress={() => actions.answer.mutate({ id: paneId, key: 'ctrl-v' })} />
+            <ActionButton label="⌃C" color={colors.attention} busy={actions.answer.isPending} onPress={confirmInterrupt} />
+          </View>
           <View
             style={[
               styles.replyBar,
@@ -331,8 +385,10 @@ export function PaneDetailScreen() {
                   { id: paneId, text: reply },
                   {
                     onSuccess: () => {
+                      hapticSuccess();
                       setReply('');
                       goFast();
+                      scrollToEnd();
                     },
                   },
                 )
@@ -357,6 +413,7 @@ export function PaneDetailScreen() {
 
 const styles = StyleSheet.create({
   scroll: { padding: 12, paddingBottom: 60 },
+  staticTop: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 10 },
   card: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, padding: 12 },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { fontSize: 17, flex: 1 },
@@ -368,6 +425,9 @@ const styles = StyleSheet.create({
   escBtn: { paddingVertical: 6, alignItems: 'center' },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' },
   replyError: { fontSize: 12, paddingHorizontal: 12, paddingTop: 6 },
+  keyStrip: { flexDirection: 'row', gap: 8, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 6 },
+  tabBar: { flexDirection: 'row', gap: 6, marginTop: 16 },
+  tab: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
   replyBar: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 8, borderTopWidth: StyleSheet.hairlineWidth },
   replyInput: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14, maxHeight: 120 },
   sendBtn: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 9 },

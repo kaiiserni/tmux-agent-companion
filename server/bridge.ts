@@ -470,7 +470,7 @@ function sendText(paneId: string, text: string) {
   tmux(["send-keys", "-t", paneId, "Enter"]);
 }
 
-const KEY_MAP: Record<string, string> = { esc: "Escape", enter: "Enter", up: "Up", down: "Down" };
+const KEY_MAP: Record<string, string> = { esc: "Escape", enter: "Enter", up: "Up", down: "Down", "ctrl-v": "C-v", "ctrl-c": "C-c", i: "i" };
 
 function sendKey(paneId: string, key: string) {
   if (/^[0-9]$/.test(key)) {
