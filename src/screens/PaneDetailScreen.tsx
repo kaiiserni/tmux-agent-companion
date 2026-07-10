@@ -301,57 +301,6 @@ export function PaneDetailScreen() {
         ) : null}
       </View>
 
-      {/* decision - pending permission/choice menu; collapses to one row when large */}
-      {options.length > 0 ? (
-        <View style={[styles.decision, { borderColor: colors.waiting, backgroundColor: colors.surfaceAlt }]}>
-          <Pressable
-            onPress={() => {
-              hapticTap();
-              setDecisionOpen((v) => !v);
-            }}
-            hitSlop={6}
-          >
-            <Text style={{ color: colors.waiting, fontFamily: font.semibold, fontSize: 12 }}>
-              {decisionOpen ? '▾' : '▸'} ◐ {prompt.data?.wait_reason ?? 'waiting'} · {options.length} option{options.length === 1 ? '' : 's'}
-            </Text>
-          </Pressable>
-          {decisionOpen ? (
-            <View style={{ marginTop: 8 }}>
-              {options.map((o) => (
-                <Pressable
-                  key={`${o.num}:${o.label}`}
-                  disabled={actions.answer.isPending}
-                  onPress={() => {
-                    hapticSelect();
-                    actions.answer.mutate({ id: paneId, key: String(o.num) });
-                    goFast();
-                  }}
-                  style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
-                >
-                  <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
-                    <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
-                  </Text>
-                  {o.description ? (
-                    <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
-                      {o.description}
-                    </Text>
-                  ) : null}
-                </Pressable>
-              ))}
-              <Pressable
-                onPress={() => {
-                  actions.answer.mutate({ id: paneId, key: 'esc' });
-                  goFast();
-                }}
-                style={styles.escBtn}
-              >
-                <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>Esc · cancel</Text>
-              </Pressable>
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-
       {isClaude && prompt.isError ? (
         <Text style={[styles.hint, { color: colors.waiting, fontFamily: font.regular, marginTop: 10 }]}>
           Couldn't read the agent's prompt state - check VPN/token.
@@ -452,6 +401,56 @@ export function PaneDetailScreen() {
               Options changed - pull to refresh and choose again.
             </Text>
           ) : null}
+          {/* decision - pending choice menu, docked above the key strip / keyboard */}
+          {options.length > 0 ? (
+            <View style={[styles.decision, { borderColor: colors.waiting, backgroundColor: colors.surfaceAlt }]}>
+              <Pressable
+                onPress={() => {
+                  hapticTap();
+                  setDecisionOpen((v) => !v);
+                }}
+                hitSlop={6}
+              >
+                <Text style={{ color: colors.waiting, fontFamily: font.semibold, fontSize: 12 }}>
+                  {decisionOpen ? '▾' : '▸'} ◐ {prompt.data?.wait_reason ?? 'waiting'} · {options.length} option{options.length === 1 ? '' : 's'}
+                </Text>
+              </Pressable>
+              {decisionOpen ? (
+                <ScrollView style={styles.decisionScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                  {options.map((o) => (
+                    <Pressable
+                      key={`${o.num}:${o.label}`}
+                      disabled={actions.answer.isPending}
+                      onPress={() => {
+                        hapticSelect();
+                        actions.answer.mutate({ id: paneId, key: String(o.num) });
+                        goFast();
+                      }}
+                      style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
+                    >
+                      <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
+                        <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
+                      </Text>
+                      {o.description ? (
+                        <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
+                          {o.description}
+                        </Text>
+                      ) : null}
+                    </Pressable>
+                  ))}
+                  <Pressable
+                    onPress={() => {
+                      actions.answer.mutate({ id: paneId, key: 'esc' });
+                      goFast();
+                    }}
+                    style={styles.escBtn}
+                  >
+                    <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>Esc · cancel</Text>
+                  </Pressable>
+                </ScrollView>
+              ) : null}
+            </View>
+          ) : null}
           <View style={[styles.keyStrip, { backgroundColor: colors.deepest }]}>
             <ActionButton label="i" color={colors.running} busy={actions.answer.isPending} onPress={() => actions.answer.mutate({ id: paneId, key: 'i' })} />
             <ActionButton label="⌃V" color={colors.magenta} busy={actions.answer.isPending} onPress={() => actions.answer.mutate({ id: paneId, key: 'ctrl-v' })} />
@@ -517,7 +516,8 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, marginTop: 6 },
   wait: { fontSize: 13, marginTop: 8 },
   needs: { fontSize: 13, marginTop: 8, lineHeight: 18 },
-  decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginTop: 12 },
+  decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginHorizontal: 8, marginBottom: 6 },
+  decisionScroll: { maxHeight: 320 },
   termCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   termFullBtn: { position: 'absolute', right: 8, width: 34, height: 34, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', opacity: 0.85 },
   option: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6 },
