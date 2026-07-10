@@ -177,6 +177,7 @@ export function PaneDetailScreen() {
   const activity = useActivity(paneId);
   const [detailTab, setDetailTab] = useState<'conversation' | 'screen' | 'activity' | 'terminal'>('conversation');
   const [termFull, setTermFull] = useState(false);
+  const [decisionOpen, setDecisionOpen] = useState(true);
   const navigation = useNavigation();
   const fullscreen = detailTab === 'terminal' && termFull;
   useEffect(() => {
@@ -191,6 +192,10 @@ export function PaneDetailScreen() {
   const [reply, setReply] = useState('');
   const [visible, setVisible] = useState(10);
   const options = prompt.data?.waiting ? prompt.data.options : [];
+  // Many options collapse to one row so the conversation stays visible.
+  useEffect(() => {
+    setDecisionOpen(options.length <= 2);
+  }, [options.length]);
 
   // Auto-scroll the conversation to the latest turn on new content / after sending.
   const scrollRef = useRef<ScrollView>(null);
@@ -223,13 +228,55 @@ export function PaneDetailScreen() {
       },
     ]);
 
+  const tabBar = (
+    <View style={styles.tabBar}>
+      {(['conversation', 'screen', 'activity', 'terminal'] as const).map((t) => (
+        <Pressable
+          key={t}
+          onPress={() => {
+            setDetailTab(t);
+            if (t !== 'terminal') setTermFull(false);
+          }}
+          style={[styles.tab, { borderColor: detailTab === t ? colors.accent : colors.border, backgroundColor: detailTab === t ? colors.surfaceAlt : 'transparent' }]}
+        >
+          <Text style={{ color: detailTab === t ? colors.accent : colors.muted, fontFamily: font.medium, fontSize: 12 }}>
+            {t === 'conversation' ? 'Conv' : t === 'screen' ? 'Screen' : t === 'activity' ? 'Activity' : 'Terminal'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingBottom: kbHeight }}>
-      {fullscreen ? null : (
-      <View style={styles.staticTop}>
-      {/* terminal tab is compact: only the tab bar, all room for the terminal */}
-      {detailTab === 'terminal' ? null : (
-      <>
+      {detailTab === 'terminal' ? (
+        // terminal tab is compact: only the tab bar, all room for the terminal
+        <>
+          {fullscreen ? null : <View style={styles.staticTop}>{tabBar}</View>}
+          <View style={{ flex: 1, paddingTop: fullscreen ? insets.top : 0 }}>
+            <TerminalView paneId={paneId} />
+            <Pressable
+              onPress={() => {
+                hapticTap();
+                setTermFull((v) => !v);
+              }}
+              hitSlop={10}
+              style={[styles.termFullBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, top: fullscreen ? insets.top + 6 : 6 }]}
+            >
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>{fullscreen ? '⤡' : '⤢'}</Text>
+            </Pressable>
+          </View>
+        </>
+      ) : (
+      // header + decision + actions scroll away with the content; tabs stick on top
+      <ScrollView
+        ref={scrollRef}
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        stickyHeaderIndices={[1]}
+      >
+      <View style={styles.topBlock}>
       {/* header */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.headRow}>
@@ -254,44 +301,54 @@ export function PaneDetailScreen() {
         ) : null}
       </View>
 
-      {/* decision - pending permission/choice menu */}
+      {/* decision - pending permission/choice menu; collapses to one row when large */}
       {options.length > 0 ? (
         <View style={[styles.decision, { borderColor: colors.waiting, backgroundColor: colors.surfaceAlt }]}>
-          <Text style={{ color: colors.waiting, fontFamily: font.semibold, fontSize: 12, marginBottom: 6 }}>
-            ◐ {prompt.data?.wait_reason ?? 'waiting'} - choose:
-          </Text>
-          <ScrollView style={styles.decisionScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-            {options.map((o) => (
-              <Pressable
-                key={`${o.num}:${o.label}`}
-                disabled={actions.answer.isPending}
-                onPress={() => {
-                  hapticSelect();
-                  actions.answer.mutate({ id: paneId, key: String(o.num) });
-                  goFast();
-                }}
-                style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
-              >
-                <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
-                  <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
-                </Text>
-                {o.description ? (
-                  <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
-                    {o.description}
-                  </Text>
-                ) : null}
-              </Pressable>
-            ))}
-          </ScrollView>
           <Pressable
             onPress={() => {
-              actions.answer.mutate({ id: paneId, key: 'esc' });
-              goFast();
+              hapticTap();
+              setDecisionOpen((v) => !v);
             }}
-            style={styles.escBtn}
+            hitSlop={6}
           >
-            <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>Esc · cancel</Text>
+            <Text style={{ color: colors.waiting, fontFamily: font.semibold, fontSize: 12 }}>
+              {decisionOpen ? '▾' : '▸'} ◐ {prompt.data?.wait_reason ?? 'waiting'} · {options.length} option{options.length === 1 ? '' : 's'}
+            </Text>
           </Pressable>
+          {decisionOpen ? (
+            <View style={{ marginTop: 8 }}>
+              {options.map((o) => (
+                <Pressable
+                  key={`${o.num}:${o.label}`}
+                  disabled={actions.answer.isPending}
+                  onPress={() => {
+                    hapticSelect();
+                    actions.answer.mutate({ id: paneId, key: String(o.num) });
+                    goFast();
+                  }}
+                  style={({ pressed }) => [styles.option, { borderColor: colors.border, opacity: pressed ? 0.5 : 1 }]}
+                >
+                  <Text style={{ color: colors.text, fontFamily: font.medium, fontSize: 13 }}>
+                    <Text style={{ color: colors.accent }}>{o.num}.</Text> {o.label}
+                  </Text>
+                  {o.description ? (
+                    <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
+                      {o.description}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              ))}
+              <Pressable
+                onPress={() => {
+                  actions.answer.mutate({ id: paneId, key: 'esc' });
+                  goFast();
+                }}
+                style={styles.escBtn}
+              >
+                <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>Esc · cancel</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -313,44 +370,11 @@ export function PaneDetailScreen() {
         <ActionButton label="Clear" color={colors.waiting} busy={actions.clear.isPending} onPress={() => actions.clear.mutate(paneId)} />
         <ActionButton label="Jump" color={colors.running} busy={actions.goto.isPending} onPress={confirmGoto} />
       </View>
-      </>
-      )}
+      </View>
 
-      {/* tabs */}
-      <View style={styles.tabBar}>
-        {(['conversation', 'screen', 'activity', 'terminal'] as const).map((t) => (
-          <Pressable
-            key={t}
-            onPress={() => {
-              setDetailTab(t);
-              if (t !== 'terminal') setTermFull(false);
-            }}
-            style={[styles.tab, { borderColor: detailTab === t ? colors.accent : colors.border, backgroundColor: detailTab === t ? colors.surfaceAlt : 'transparent' }]}
-          >
-            <Text style={{ color: detailTab === t ? colors.accent : colors.muted, fontFamily: font.medium, fontSize: 12 }}>
-              {t === 'conversation' ? 'Conv' : t === 'screen' ? 'Screen' : t === 'activity' ? 'Activity' : 'Terminal'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      </View>
-      )}
-      {detailTab === 'terminal' ? (
-        <View style={{ flex: 1, paddingTop: fullscreen ? insets.top : 0 }}>
-          <TerminalView paneId={paneId} />
-          <Pressable
-            onPress={() => {
-              hapticTap();
-              setTermFull((v) => !v);
-            }}
-            hitSlop={10}
-            style={[styles.termFullBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border, top: fullscreen ? insets.top + 6 : 6 }]}
-          >
-            <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>{fullscreen ? '⤡' : '⤢'}</Text>
-          </Pressable>
-        </View>
-      ) : (
-      <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      {/* tabs (sticky) */}
+      <View style={[styles.stickyTabs, { backgroundColor: colors.bg }]}>{tabBar}</View>
+      <View style={styles.tabContent}>
 
       {/* conversation */}
       {detailTab === 'conversation' ? (
@@ -413,6 +437,7 @@ export function PaneDetailScreen() {
           <Text style={[styles.hint, { color: colors.muted, fontFamily: font.regular }]}>No activity yet.</Text>
         )
       ) : null}
+      </View>
       </ScrollView>
       )}
       {isClaude && detailTab !== 'activity' && detailTab !== 'terminal' ? (
@@ -481,7 +506,10 @@ export function PaneDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: { padding: 12, paddingBottom: 60 },
+  scrollContent: { paddingBottom: 60 },
+  topBlock: { paddingHorizontal: 12, paddingTop: 12 },
+  stickyTabs: { paddingHorizontal: 12, paddingBottom: 10 },
+  tabContent: { paddingHorizontal: 12, paddingTop: 12 },
   staticTop: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 10 },
   card: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, padding: 12 },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -490,7 +518,6 @@ const styles = StyleSheet.create({
   wait: { fontSize: 13, marginTop: 8 },
   needs: { fontSize: 13, marginTop: 8, lineHeight: 18 },
   decision: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, marginTop: 12 },
-  decisionScroll: { maxHeight: 300 },
   termCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   termFullBtn: { position: 'absolute', right: 8, width: 34, height: 34, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', opacity: 0.85 },
   option: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6 },
