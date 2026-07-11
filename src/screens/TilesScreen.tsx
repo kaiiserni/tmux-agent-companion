@@ -14,6 +14,7 @@ function Tile({ pane, onPress }: { pane: Pane; onPress: () => void }) {
   const { prefs } = useApp();
   const priv = prefs.privacyMode;
   const preview = pane.summary || pane.prompt || pane.current_command || '';
+  const meta = [pane.model, pane.account].filter(Boolean).join(' · ');
   return (
     <Pressable
       onPress={onPress}
@@ -26,6 +27,11 @@ function Tile({ pane, onPress }: { pane: Pane; onPress: () => void }) {
           {redact(paneLabel(pane, prefs.technicalNames), priv)}
         </Text>
       </View>
+      {meta ? (
+        <Text style={[styles.tileMeta, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
+          {meta}
+        </Text>
+      ) : null}
       {preview ? (
         <Text style={[styles.tilePreview, { color: colors.dim, fontFamily: font.regular }]} numberOfLines={2}>
           {pane.summary ? '✦ ' : ''}
@@ -36,7 +42,7 @@ function Tile({ pane, onPress }: { pane: Pane; onPress: () => void }) {
         <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11 }}>{pane.status}</Text>
         {pane.permission_mode ? <Badge text={pane.permission_mode} color={colors.magenta} /> : null}
         {pane.attention ? (
-          <Text style={{ color: colors.attention, fontFamily: font.medium, fontSize: 11 }}>▲ {pane.wait_reason ?? ''}</Text>
+          <Text style={{ color: colors.attention, fontFamily: font.medium, fontSize: 11, flexShrink: 1 }} numberOfLines={1}>▲ {pane.wait_reason ?? ''}</Text>
         ) : !priv ? (
           <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11 }}>{ageLabel(pane.age_minutes)}</Text>
         ) : null}
@@ -123,6 +129,7 @@ const styles = StyleSheet.create({
   },
   tileTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tileLabel: { fontSize: 13, flex: 1 },
+  tileMeta: { fontSize: 10, marginTop: 3 },
   tilePreview: { fontSize: 11, lineHeight: 15, marginTop: 6 },
   tileFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
 });
