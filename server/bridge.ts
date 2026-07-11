@@ -91,6 +91,7 @@ const LIST_FORMAT = [
   "#{window_name}",
   "#{@pane_bg_cmd}",
   "#{pane_current_command}",
+  "#{pane_pid}",
 ].join(SEP);
 
 interface LivePane {
@@ -115,6 +116,7 @@ interface LivePane {
   windowName: string;
   bgCmd: string;
   currentCommand: string;
+  panePid: number;
   prompt: string;
   summary: string;
   activityAt: number;
@@ -122,11 +124,12 @@ interface LivePane {
 
 function parseLivePaneLine(line: string): LivePane | null {
   const p = line.split(SEP);
-  if (p.length < 22) return null;
+  if (p.length < 23) return null;
   const [paneId, session = "", win = "", pane = "", windowId = "", paneActive = "",
     agent = "", status = "", attention = "", waitReason = "", cwd = "", lastSeen = "",
     started = "", permMode = "", markedUnread = "", wtName = "", wtBranch = "",
-    sessionId = "", paneName = "", windowName = "", bgCmd = "", currentCommand = ""] = p;
+    sessionId = "", paneName = "", windowName = "", bgCmd = "", currentCommand = "",
+    panePid = ""] = p;
   if (!agent || !paneId) return null;
   return {
     paneId,
@@ -150,6 +153,7 @@ function parseLivePaneLine(line: string): LivePane | null {
     windowName: windowName ?? "",
     bgCmd: bgCmd ?? "",
     currentCommand: currentCommand ?? "",
+    panePid: Number(panePid) || 0,
     prompt: paneOption(paneId, "@pane_prompt"),
     summary: paneOption(paneId, "@pane_summary"),
     activityAt: activityMtime(paneId),
@@ -241,6 +245,90 @@ function loadOverviewByProject(): Map<string, OverviewProject> {
   return map;
 }
 
+// --- model + account per pane ------------------------------------------------
+
+// A pane's Claude account = the CLAUDE_CONFIG_DIR its process tree runs under.
+// A process's env never changes, so cache by pid (a restart gets a fresh pid).
+const accountCache = new Map<number, string>();
+
+function readEnvVar(pid: number, name: string): string | null {
+  // Linux: procfs, exact and cheap.
+  try {
+    const buf = readFileSync(`/proc/${pid}/environ`);
+    for (const kv of buf.toString("utf8").split("\0")) {
+      if (kv.startsWith(`${name}=`)) return kv.slice(name.length + 1);
+    }
+  } catch {
+    // not Linux (or no procfs) → macOS fallback: ps exposes a same-user
+    // process's own env with -E.
+    const proc = Bun.spawnSync(["ps", "-Eww", "-o", "command=", "-p", String(pid)]);
+    if (proc.exitCode === 0) {
+      const m = proc.stdout.toString().match(new RegExp(`\\b${name}=(\\S+)`));
+      if (m) return m[1]!;
+    }
+  }
+  return null;
+}
+
+function accountLabel(dir: string | null): string {
+  if (!dir || dir.endsWith("/.claude")) return "g"; // default dir → gmail account
+  if (dir.includes("canarycoders")) return "c";
+  if (dir.includes("canarypulse")) return "p";
+  return "g";
+}
+
+// The fish wrapper sets CLAUDE_CONFIG_DIR then exec's `node claude`, so the var
+// sits on the pane pid or one of its direct children.
+function paneAccount(pid: number): string {
+  if (!pid) return "";
+  const cached = accountCache.get(pid);
+  if (cached !== undefined) return cached;
+  let dir = readEnvVar(pid, "CLAUDE_CONFIG_DIR");
+  if (!dir) {
+    const kids = Bun.spawnSync(["pgrep", "-P", String(pid)]).stdout.toString().trim();
+    for (const k of kids.split(/\s+/).filter(Boolean)) {
+      dir = readEnvVar(Number(k), "CLAUDE_CONFIG_DIR");
+      if (dir) break;
+    }
+  }
+  const label = accountLabel(dir);
+  accountCache.set(pid, label);
+  return label;
+}
+
+// A pane's model = the model of the last assistant turn in its transcript.
+// Cached per session with a short TTL so /panes stays cheap under polling.
+const modelCache = new Map<string, { at: number; label: string }>();
+const MODEL_TTL_MS = 20_000;
+
+function shortModel(id: string): string {
+  // claude-opus-4-8 → Opus 4.8 ; claude-haiku-4-5-20251001 → Haiku 4.5
+  const m = id.match(/claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?/i);
+  if (!m) return "";
+  const fam = m[1]![0]!.toUpperCase() + m[1]!.slice(1).toLowerCase();
+  return `${fam} ${m[3] ? `${m[2]}.${m[3]}` : m[2]}`;
+}
+
+function paneModel(sessionId: string): string {
+  if (!sessionId) return "";
+  const now = Date.now();
+  const hit = modelCache.get(sessionId);
+  if (hit && now - hit.at < MODEL_TTL_MS) return hit.label;
+  let label = hit?.label ?? "";
+  const path = findTranscript(sessionId);
+  if (path) {
+    try {
+      const lines = tailText(path, 256 * 1024).split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const mm = lines[i]!.match(/"model":"(claude-[^"]+)"/);
+        if (mm) { label = shortModel(mm[1]!); break; }
+      }
+    } catch { /* keep last known */ }
+  }
+  modelCache.set(sessionId, { at: now, label });
+  return label;
+}
+
 function paneToJson(p: LivePane, nowSec: number, proj?: OverviewProject) {
   return {
     pane_id: p.paneId,
@@ -250,6 +338,8 @@ function paneToJson(p: LivePane, nowSec: number, proj?: OverviewProject) {
     project: projectName(p.cwd),
     cwd: p.cwd,
     agent: p.agent,
+    model: paneModel(p.sessionId),
+    account: paneAccount(p.panePid),
     status: p.status,
     attention: p.attention,
     wait_reason: p.waitReason || null,

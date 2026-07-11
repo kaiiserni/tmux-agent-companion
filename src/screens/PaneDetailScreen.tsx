@@ -290,7 +290,10 @@ export function PaneDetailScreen() {
           {pane?.permission_mode ? <Badge text={pane.permission_mode} color={colors.magenta} /> : null}
         </View>
         <Text style={[styles.meta, { color: colors.muted, fontFamily: font.regular }]}>
-          {pane?.target} · {pane?.agent} · {pane?.status}
+          {pane?.target} · {pane?.agent}
+          {pane?.model ? ` · ${pane.model}` : ''}
+          {pane?.account ? ` · ${pane.account}` : ''}
+          {` · ${pane?.status}`}
           {pane?.age_minutes != null ? ` · ${ageLabel(pane.age_minutes)}` : ''}
         </Text>
         {pane?.wait_reason ? (

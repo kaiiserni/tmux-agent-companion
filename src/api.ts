@@ -8,6 +8,8 @@ export interface Pane {
   project: string;
   cwd: string;
   agent: string;
+  model: string;
+  account: string;
   status: string;
   attention: boolean;
   wait_reason: string | null;

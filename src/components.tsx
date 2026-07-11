@@ -118,6 +118,7 @@ export function PaneRow({ pane, onPress }: { pane: Pane; onPress: () => void }) 
   const priv = prefs.privacyMode;
   const reason = redact(paneReason(pane), priv);
   const label = redact(paneLabel(pane, prefs.technicalNames), priv);
+  const meta = [pane.model, pane.account].filter(Boolean).join(' · ');
   return (
     <Pressable
       onPress={onPress}
@@ -139,6 +140,11 @@ export function PaneRow({ pane, onPress }: { pane: Pane; onPress: () => void }) 
         <Text style={[styles.rowLabel, { color: colors.text, fontFamily: font.medium }]} numberOfLines={1}>
           {label}
         </Text>
+        {meta ? (
+          <Text style={[styles.rowMeta, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
+            {meta}
+          </Text>
+        ) : null}
         {reason ? (
           <Text style={[styles.rowReason, { color: colors.dim, fontFamily: font.regular }]} numberOfLines={1}>
             {reason}
@@ -193,6 +199,7 @@ const styles = StyleSheet.create({
   agentIcon: { fontSize: 13, width: 14, textAlign: 'center' },
   rowMid: { flex: 1, minWidth: 0 },
   rowLabel: { fontSize: 15 },
+  rowMeta: { fontSize: 10, marginTop: 1 },
   rowReason: { fontSize: 12, marginTop: 2 },
   age: { fontSize: 12 },
 });
