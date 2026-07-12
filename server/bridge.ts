@@ -714,8 +714,36 @@ function json(body: unknown, status = 200): Response {
 // node-pty won't spawn under Bun (posix_spawnp fails); it works under Node. So the
 // PTY runs in a Node sidecar (pty-bridge.cjs) that we Bun.spawn per WS connection.
 
-const NODE_BIN = process.env.NODE_BIN || "/opt/homebrew/bin/node";
-const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
+// Hardcoding /opt/homebrew broke the terminal the moment the fleet moved to Linux,
+// and a systemd unit gets a bare PATH, so resolve: env -> PATH -> known locations.
+function fnmNodes(): string[] {
+  const dir = join(homedir(), ".local/share/fnm/node-versions");
+  try {
+    return readdirSync(dir)
+      .sort()
+      .reverse()
+      .map((v) => join(dir, v, "installation/bin/node"));
+  } catch {
+    return [];
+  }
+}
+
+function resolveBin(envVar: string, name: string, candidates: string[]): string {
+  const fromEnv = process.env[envVar];
+  if (fromEnv) return fromEnv;
+  const onPath = Bun.which(name);
+  if (onPath) return onPath;
+  for (const c of candidates) if (existsSync(c)) return c;
+  return name;
+}
+
+const NODE_BIN = resolveBin("NODE_BIN", "node", [
+  ...fnmNodes(),
+  "/usr/local/bin/node",
+  "/usr/bin/node",
+  "/opt/homebrew/bin/node",
+]);
+const TMUX_BIN = resolveBin("TMUX_BIN", "tmux", ["/usr/bin/tmux", "/usr/local/bin/tmux", "/opt/homebrew/bin/tmux"]);
 const PTY_BRIDGE = join(import.meta.dir, "pty-bridge.cjs");
 const XTERM_DIR = join(import.meta.dir, "node_modules/@xterm");
 
