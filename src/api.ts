@@ -153,6 +153,8 @@ export interface UsageLimit {
   percent: number | null;
   severity: string;
   resets_at: string | null;
+  // Non-Claude tools (codex) report a human string, not an ISO timestamp.
+  resets_text: string | null;
   model: string | null;
 }
 // One entry per Claude account; `key` matches a pane's `account` (g/c/p).

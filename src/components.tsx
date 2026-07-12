@@ -96,7 +96,7 @@ export function StatsStrip() {
             style={({ pressed }) => [styles.statsRow, { opacity: pressed ? 0.6 : 1 }]}
           >
             <Text style={{ fontFamily: font.regular, fontSize: 12, flex: 1 }}>
-              <Text style={{ color: colors.muted }}>CLD </Text>
+              <Text style={{ color: colors.muted }}>USG </Text>
               {usage.data.accounts.map((a) => (
                 <Text key={a.key}>
                   <Text style={{ color: colors.dim }}>{a.key.toUpperCase()} </Text>
@@ -125,6 +125,10 @@ function sevColor(l: UsageLimit | null | undefined, colors: ReturnType<typeof us
 }
 
 const pctText = (l: UsageLimit | null | undefined) => (l?.percent == null ? '-' : `${Math.round(l.percent)}%`);
+
+function resetsLabel(l: UsageLimit): string {
+  return l.resets_at ? resetsIn(l.resets_at) : (l.resets_text ?? '');
+}
 
 function resetsIn(iso: string | null): string {
   if (!iso) return '';
@@ -271,7 +275,7 @@ function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: ()
                         {pctText(l)}
                       </Text>
                       <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, flex: 1, textAlign: 'right' }} numberOfLines={1}>
-                        {resetsIn(l.resets_at)}
+                        {resetsLabel(l)}
                       </Text>
                     </View>
                   ))

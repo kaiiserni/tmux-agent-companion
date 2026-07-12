@@ -663,13 +663,54 @@ const USAGE_ACCOUNTS = [
   { key: "p", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
 ];
 
+// Non-Claude CLIs the poller also tracks. They report what's LEFT (not used) and
+// give a human string instead of an ISO reset, hence resets_text.
+const USAGE_TOOLS = [{ key: "x", name: "codex", file: "/tmp/codex-usage-raw.json" }];
+
 interface UsageLimit {
   kind: string;
   group: string;
   percent: number | null;
   severity: string;
   resets_at: string | null;
+  resets_text: string | null;
   model: string | null;
+}
+
+function severityFor(percent: number): string {
+  if (percent >= 95) return "critical";
+  if (percent >= 80) return "warning";
+  return "normal";
+}
+
+function usageForTool(file: string) {
+  const j = JSON.parse(readFileSync(file, "utf8"));
+  const lim = (leftKey: string, resetKey: string, kind: string, group: string): UsageLimit | null => {
+    const left = j[leftKey];
+    if (typeof left !== "number") return null;
+    const percent = Math.max(0, Math.min(100, 100 - left));
+    return {
+      kind,
+      group,
+      percent,
+      severity: severityFor(percent),
+      resets_at: null,
+      resets_text: typeof j[resetKey] === "string" ? j[resetKey] : null,
+      model: null,
+    };
+  };
+  const session = lim("five_hour_left", "five_hour_resets", "session", "session");
+  const weekly = lim("weekly_left", "weekly_resets", "weekly_all", "weekly");
+  const limits = [session, weekly].filter((l): l is UsageLimit => l !== null);
+  if (limits.length === 0) throw new Error("no usable fields");
+  return {
+    updated_at: Math.floor(statSync(file).mtimeMs / 1000),
+    plan: null,
+    session,
+    weekly,
+    weekly_scoped: null,
+    limits,
+  };
 }
 
 function usageForAccount(file: string) {
@@ -680,6 +721,7 @@ function usageForAccount(file: string) {
     percent: typeof l.percent === "number" ? l.percent : null,
     severity: String(l.severity ?? "normal"),
     resets_at: (l.resets_at as string | null) ?? null,
+    resets_text: null,
     model: ((l.scope as { model?: { display_name?: string } } | null)?.model?.display_name) ?? null,
   }));
   const of = (kind: string) => limits.find((l) => l.kind === kind) ?? null;
@@ -701,7 +743,16 @@ function claudeUsage() {
       return { key: a.key, name: a.name, updated_at: 0, plan: null, session: null, weekly: null, weekly_scoped: null, limits: [] };
     }
   });
-  return { updated_at: Math.max(...accounts.map((a) => a.updated_at), 0), accounts };
+  // A tool the poller isn't tracking (yet) is simply absent, not an empty row.
+  const tools = USAGE_TOOLS.flatMap((t) => {
+    try {
+      return [{ key: t.key, name: t.name, ...usageForTool(t.file) }];
+    } catch {
+      return [];
+    }
+  });
+  const all = [...accounts, ...tools];
+  return { updated_at: Math.max(...all.map((a) => a.updated_at), 0), accounts: all };
 }
 
 // --- answering (send-keys) ---------------------------------------------------
