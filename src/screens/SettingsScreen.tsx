@@ -87,6 +87,10 @@ export function SettingsScreen({
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
+          // secureTextEntry alone makes iOS offer to save it to Keychain; it's a
+          // bearer token, not a password.
+          textContentType="none"
+          autoComplete="off"
           placeholder="paste bridge token"
           placeholderTextColor={colors.muted}
           style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border, fontFamily: font.regular }]}
