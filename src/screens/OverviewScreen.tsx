@@ -1,7 +1,10 @@
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Empty, ErrorBanner, TopBar } from '../components';
+import { useNavigation } from '@react-navigation/native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ageLabel, Empty, ErrorBanner, TopBar } from '../components';
 import { redact, useApp } from '../context';
 import { useManualRefresh, useOverviewFull } from '../hooks';
+import type { RootNav } from '../navigation';
+import { agentGlyph, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
 
 function ago(updatedAt: number): string {
@@ -14,6 +17,7 @@ function ago(updatedAt: number): string {
 
 export function OverviewScreen() {
   const { colors, font } = useTheme();
+  const nav = useNavigation<RootNav>();
   const { prefs } = useApp();
   const priv = prefs.privacyMode;
   const q = useOverviewFull();
@@ -70,6 +74,25 @@ export function OverviewScreen() {
             {p.active_md?.map((m, i) => (
               <Text key={i} style={[styles.activeMd, { color: colors.muted, fontFamily: font.regular }]}>{redact(m, priv)}</Text>
             ))}
+            {p.panes?.map((pn) => (
+              <Pressable
+                key={pn.pane_id}
+                onPress={() => nav.navigate('PaneDetail', { paneId: pn.pane_id, title: p.name })}
+                style={({ pressed }) => [styles.paneRow, { borderTopColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Text style={{ color: statusColor(pn.status, colors), fontFamily: font.regular, fontSize: 12 }}>
+                  {statusGlyph(pn.status)}
+                </Text>
+                <Text style={{ color: colors.accent, fontFamily: font.regular, fontSize: 12 }}>{agentGlyph(pn.agent)}</Text>
+                <Text style={[styles.paneTarget, { color: colors.text, fontFamily: font.medium }]} numberOfLines={1}>
+                  {pn.target}
+                </Text>
+                {!priv ? (
+                  <Text style={[styles.paneAge, { color: colors.muted, fontFamily: font.regular }]}>{ageLabel(pn.age_minutes)}</Text>
+                ) : null}
+                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
+              </Pressable>
+            ))}
           </View>
         ))}
 
@@ -77,9 +100,16 @@ export function OverviewScreen() {
           <View style={styles.idleBlock}>
             <Text style={[styles.idleHeader, { color: colors.dim, fontFamily: font.semibold }]}>IDLE · {ov.idle.length}</Text>
             {ov.idle.map((i) => (
-              <Text key={i.pane_id} style={[styles.idleLine, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
-                {i.target} · {i.project} - {redact(i.task, priv)}
-              </Text>
+              <Pressable
+                key={i.pane_id}
+                onPress={() => nav.navigate('PaneDetail', { paneId: i.pane_id, title: i.project })}
+                style={({ pressed }) => [styles.idleRow, { opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.idleLine, { color: colors.muted, fontFamily: font.regular }]} numberOfLines={1}>
+                  {i.target} · {i.project} - {redact(i.task, priv)}
+                </Text>
+                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
+              </Pressable>
             ))}
           </View>
         ) : null}
@@ -103,7 +133,18 @@ const styles = StyleSheet.create({
   needs: { fontSize: 13, lineHeight: 18, marginTop: 8 },
   next: { fontSize: 12, lineHeight: 17, marginTop: 4 },
   activeMd: { fontSize: 12, fontStyle: 'italic', marginTop: 4 },
+  paneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingTop: 7,
+    marginTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  paneTarget: { fontSize: 12, flex: 1 },
+  paneAge: { fontSize: 11 },
   idleBlock: { marginTop: 8 },
   idleHeader: { fontSize: 11, letterSpacing: 0.6, paddingVertical: 6, paddingHorizontal: 4 },
-  idleLine: { fontSize: 12, lineHeight: 17, paddingHorizontal: 4 },
+  idleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4, paddingVertical: 3 },
+  idleLine: { fontSize: 12, lineHeight: 17, flex: 1 },
 });
