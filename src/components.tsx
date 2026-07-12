@@ -98,14 +98,28 @@ export function StatsStrip() {
             <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>USG</Text>
             {/* wrap per entry, so a 5th tool never breaks mid-percentage */}
             <View style={styles.usageEntries}>
-              {usage.data.accounts.map((a) => (
-                <Text key={a.key} style={{ fontFamily: font.regular, fontSize: 12 }}>
-                  <Text style={{ color: colors.dim }}>{a.label} </Text>
-                  <Text style={{ color: sevColor(a.session, colors) }}>{pctText(a.session)}</Text>
-                  <Text style={{ color: colors.muted }}>/</Text>
-                  <Text style={{ color: sevColor(a.weekly, colors) }}>{pctText(a.weekly)}</Text>
-                </Text>
-              ))}
+              {usage.data.accounts.map((a) => {
+                // grok has no 5h window - show only the windows a tool actually reports,
+                // so it reads "G 0%" instead of "G -/0%".
+                const windows = [a.session, a.weekly].filter(
+                  (l): l is UsageLimit => l != null && l.percent != null,
+                );
+                return (
+                  <Text key={a.key} style={{ fontFamily: font.regular, fontSize: 12 }}>
+                    <Text style={{ color: colors.dim }}>{a.label} </Text>
+                    {windows.length === 0 ? (
+                      <Text style={{ color: colors.muted }}>-</Text>
+                    ) : (
+                      windows.map((l, i) => (
+                        <Text key={l.kind}>
+                          {i > 0 ? <Text style={{ color: colors.muted }}>/</Text> : null}
+                          <Text style={{ color: sevColor(l, colors) }}>{pctText(l)}</Text>
+                        </Text>
+                      ))
+                    )}
+                  </Text>
+                );
+              })}
             </View>
             <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
           </Pressable>
