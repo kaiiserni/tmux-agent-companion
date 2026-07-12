@@ -138,16 +138,28 @@ export interface SystemStats {
   mem: { used: number; total: number; percent: number };
   load: number[];
 }
-export interface UsageWindow {
-  utilization: number | null;
+export interface UsageLimit {
+  kind: string;
+  group: string;
+  percent: number | null;
+  severity: string;
   resets_at: string | null;
+  model: string | null;
+}
+// One entry per Claude account; `key` matches a pane's `account` (g/c/p).
+export interface UsageAccount {
+  key: string;
+  name: string;
+  updated_at: number;
+  plan: string | null;
+  session: UsageLimit | null;
+  weekly: UsageLimit | null;
+  weekly_scoped: UsageLimit | null;
+  limits: UsageLimit[];
 }
 export interface ClaudeUsage {
   updated_at: number;
-  plan: string | null;
-  five_hour: UsageWindow | null;
-  seven_day: UsageWindow | null;
-  seven_day_opus: UsageWindow | null;
+  accounts: UsageAccount[];
 }
 export const getSystem = (b: string) => get<SystemStats>(b, '/system');
 export const getClaudeUsage = (b: string) => get<ClaudeUsage>(b, '/claude-usage');

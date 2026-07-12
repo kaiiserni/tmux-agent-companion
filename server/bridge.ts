@@ -579,22 +579,53 @@ async function systemStats() {
   return { cpu: await cpuPercent(), mem: memStats(), load: loadavg().map((n) => Math.round(n * 100) / 100) };
 }
 
-const USAGE_RAW = "/tmp/claude-usage-raw.json";
+// The usage poller writes one cache per Claude account. Keys match the account
+// labels used on panes (see accountLabel), so the app can line usage up per agent.
+const USAGE_ACCOUNTS = [
+  { key: "g", name: "kaiiserni", file: "/tmp/claude-usage-raw-kaiiserni.json" },
+  { key: "c", name: "canarycoders", file: "/tmp/claude-usage-raw-canarycoders.json" },
+  { key: "p", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
+];
+
+interface UsageLimit {
+  kind: string;
+  group: string;
+  percent: number | null;
+  severity: string;
+  resets_at: string | null;
+  model: string | null;
+}
+
+function usageForAccount(file: string) {
+  const j = JSON.parse(readFileSync(file, "utf8"));
+  const limits: UsageLimit[] = (j.limits ?? []).map((l: Record<string, unknown>) => ({
+    kind: String(l.kind ?? ""),
+    group: String(l.group ?? ""),
+    percent: typeof l.percent === "number" ? l.percent : null,
+    severity: String(l.severity ?? "normal"),
+    resets_at: (l.resets_at as string | null) ?? null,
+    model: ((l.scope as { model?: { display_name?: string } } | null)?.model?.display_name) ?? null,
+  }));
+  const of = (kind: string) => limits.find((l) => l.kind === kind) ?? null;
+  return {
+    updated_at: Math.floor(statSync(file).mtimeMs / 1000),
+    plan: j.subscription_type ?? j.plan ?? null,
+    session: of("session"),
+    weekly: of("weekly_all"),
+    weekly_scoped: of("weekly_scoped"),
+    limits,
+  };
+}
+
 function claudeUsage() {
-  const pick = (o: { utilization?: number; resets_at?: string } | undefined) =>
-    o ? { utilization: o.utilization ?? null, resets_at: o.resets_at ?? null } : null;
-  try {
-    const j = JSON.parse(readFileSync(USAGE_RAW, "utf8"));
-    return {
-      updated_at: Math.floor(statSync(USAGE_RAW).mtimeMs / 1000),
-      plan: j.subscription_type ?? j.plan ?? null,
-      five_hour: pick(j.five_hour),
-      seven_day: pick(j.seven_day),
-      seven_day_opus: pick(j.seven_day_opus),
-    };
-  } catch {
-    return { updated_at: 0, plan: null, five_hour: null, seven_day: null, seven_day_opus: null };
-  }
+  const accounts = USAGE_ACCOUNTS.map((a) => {
+    try {
+      return { key: a.key, name: a.name, ...usageForAccount(a.file) };
+    } catch {
+      return { key: a.key, name: a.name, updated_at: 0, plan: null, session: null, weekly: null, weekly_scoped: null, limits: [] };
+    }
+  });
+  return { updated_at: Math.max(...accounts.map((a) => a.updated_at), 0), accounts };
 }
 
 // --- answering (send-keys) ---------------------------------------------------

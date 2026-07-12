@@ -1,6 +1,8 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { Pane } from './api';
+import { useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { ClaudeUsage, Pane, UsageLimit } from './api';
 import { redact, useApp } from './context';
+import { hapticTap } from './haptics';
 import { useClaudeUsage, useSystem } from './hooks';
 import { agentGlyph, statusColor, statusGlyph } from './theme/glyphs';
 import { useTheme } from './theme/ThemeProvider';
@@ -43,6 +45,7 @@ export function StatsStrip() {
   const { prefs } = useApp();
   const sys = useSystem(prefs.showSystemStats);
   const usage = useClaudeUsage(prefs.showClaudeUsage);
+  const [usageOpen, setUsageOpen] = useState(false);
   if (!prefs.showSystemStats && !prefs.showClaudeUsage) return null;
   if (!sys.data && !usage.data) return null;
 
@@ -71,12 +74,115 @@ export function StatsStrip() {
         </View>
       ) : null}
       {prefs.showClaudeUsage && usage.data ? (
-        <View style={styles.statsRow}>
-          {metric('5H', usage.data.five_hour?.utilization)}
-          {metric('7D', usage.data.seven_day?.utilization)}
-        </View>
+        <>
+          <Pressable
+            onPress={() => {
+              hapticTap();
+              setUsageOpen(true);
+            }}
+            style={({ pressed }) => [styles.statsRow, { opacity: pressed ? 0.6 : 1 }]}
+          >
+            <Text style={{ fontFamily: font.regular, fontSize: 12, flex: 1 }}>
+              <Text style={{ color: colors.muted }}>CLD </Text>
+              {usage.data.accounts.map((a) => (
+                <Text key={a.key}>
+                  <Text style={{ color: colors.dim }}>{a.key.toUpperCase()} </Text>
+                  <Text style={{ color: sevColor(a.session, colors) }}>{pctText(a.session)}</Text>
+                  <Text style={{ color: colors.muted }}>/</Text>
+                  <Text style={{ color: sevColor(a.weekly, colors) }}>{pctText(a.weekly)}</Text>
+                  <Text>{'  '}</Text>
+                </Text>
+              ))}
+            </Text>
+            <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
+          </Pressable>
+          <UsageModal visible={usageOpen} onClose={() => setUsageOpen(false)} usage={usage.data} />
+        </>
       ) : null}
     </View>
+  );
+}
+
+// severity comes straight from the usage poller (normal/warning/critical).
+function sevColor(l: UsageLimit | null | undefined, colors: ReturnType<typeof useTheme>['colors']): string {
+  if (!l || l.percent == null) return colors.muted;
+  if (l.severity === 'critical') return colors.attention;
+  if (l.severity === 'warning') return colors.waiting;
+  return colors.running;
+}
+
+const pctText = (l: UsageLimit | null | undefined) => (l?.percent == null ? '-' : `${Math.round(l.percent)}%`);
+
+function resetsIn(iso: string | null): string {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return 'resetting';
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `resets in ${mins}m`;
+  const h = Math.floor(mins / 60);
+  if (h < 24) return `resets in ${h}h ${mins % 60}m`;
+  return `resets in ${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+function limitLabel(l: UsageLimit): string {
+  if (l.kind === 'session') return '5h session';
+  if (l.kind === 'weekly_all') return '7d all';
+  if (l.kind === 'weekly_scoped') return `7d ${l.model ?? 'scoped'}`;
+  return l.kind;
+}
+
+function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: () => void; usage: ClaudeUsage }) {
+  const { colors, font } = useTheme();
+  const bar = (p: number) => {
+    const fill = Math.max(0, Math.min(10, Math.round(p / 10)));
+    return '█'.repeat(fill) + '░'.repeat(10 - fill);
+  };
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.usageBackdrop} onPress={onClose}>
+        <Pressable
+          style={[styles.usageSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={styles.usageHead}>
+            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>Claude usage</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={{ maxHeight: 420 }}>
+            {usage.accounts.map((a) => (
+              <View key={a.key} style={styles.usageAcct}>
+                <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
+                  {a.key.toUpperCase()} · {a.name}
+                  {a.plan ? ` · ${a.plan}` : ''}
+                </Text>
+                {a.limits.length === 0 ? (
+                  <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12, marginTop: 4 }}>no data</Text>
+                ) : (
+                  a.limits.map((l) => (
+                    <View key={l.kind} style={styles.usageLine}>
+                      <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11, width: 84 }} numberOfLines={1}>
+                        {limitLabel(l)}
+                      </Text>
+                      <Text style={{ color: sevColor(l, colors), fontFamily: font.regular, fontSize: 11 }}>
+                        {l.percent == null ? '' : bar(l.percent)}
+                      </Text>
+                      <Text style={{ color: sevColor(l, colors), fontFamily: font.medium, fontSize: 11, width: 38, textAlign: 'right' }}>
+                        {pctText(l)}
+                      </Text>
+                      <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, flex: 1, textAlign: 'right' }} numberOfLines={1}>
+                        {resetsIn(l.resets_at)}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            ))}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -177,6 +283,11 @@ const styles = StyleSheet.create({
   error: { fontSize: 13, paddingHorizontal: 16, paddingTop: 10 },
   stats: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, gap: 6, marginHorizontal: 12, marginTop: 14, marginBottom: 10 },
   statsRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  usageBackdrop: { flex: 1, backgroundColor: '#000000aa', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  usageSheet: { width: '100%', maxWidth: 420, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
+  usageHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  usageAcct: { marginBottom: 14 },
+  usageLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },
   badge: {
     fontSize: 10,
     borderWidth: StyleSheet.hairlineWidth,
