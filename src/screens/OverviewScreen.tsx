@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Pane } from '../api';
 import { ageLabel, Empty, ErrorBanner, TopBar } from '../components';
@@ -25,6 +25,7 @@ export function OverviewScreen() {
   const q = useOverviewFull();
   const refresh = useManualRefresh(q.refetch);
   const ov = q.data;
+  const [tldrOpen, setTldrOpen] = useState(false);
   // overview.json ships an empty panes[] per project, so pair the live panes to a
   // project by name instead - that's what makes a block tappable.
   const panesQ = usePanes();
@@ -62,11 +63,22 @@ export function OverviewScreen() {
 
         {ov && ov.tldr.length > 0 ? (
           <View style={styles.tldr}>
-            {ov.tldr.map((t, i) => (
-              <Text key={i} style={[styles.tldrLine, { color: colors.text, fontFamily: font.regular }]}>
-                • {redact(t, priv)}
+            <Pressable
+              onPress={() => setTldrOpen((v) => !v)}
+              style={({ pressed }) => [styles.tldrHead, { opacity: pressed ? 0.6 : 1 }]}
+            >
+              <Text style={{ color: colors.dim, fontFamily: font.semibold, fontSize: 11, letterSpacing: 0.6 }}>
+                TL;DR · {ov.tldr.length}
               </Text>
-            ))}
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 12 }}>{tldrOpen ? '▾' : '▸'}</Text>
+            </Pressable>
+            {tldrOpen
+              ? ov.tldr.map((t, i) => (
+                  <Text key={i} style={[styles.tldrLine, { color: colors.text, fontFamily: font.regular }]}>
+                    • {redact(t, priv)}
+                  </Text>
+                ))
+              : null}
           </View>
         ) : null}
 
@@ -139,7 +151,8 @@ const styles = StyleSheet.create({
   scroll: { padding: 12, paddingBottom: 40 },
   status: { fontSize: 12, paddingHorizontal: 4, paddingBottom: 8 },
   tldr: { marginBottom: 12, paddingHorizontal: 4 },
-  tldrLine: { fontSize: 14, lineHeight: 20 },
+  tldrHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+  tldrLine: { fontSize: 14, lineHeight: 20, marginTop: 4 },
   block: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, padding: 12, marginBottom: 8 },
   blockHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   projName: { fontSize: 16 },
