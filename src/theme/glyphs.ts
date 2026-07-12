@@ -39,6 +39,7 @@ const ACCOUNT_NAMES: Record<string, string> = {
   g: 'gmail',
   c: 'canarycoders',
   p: 'canarypulse',
+  y: 'kyan',
 };
 
 export function accountLabel(key: string): string {

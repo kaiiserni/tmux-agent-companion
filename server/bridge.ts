@@ -274,6 +274,7 @@ function accountLabel(dir: string | null): string {
   if (!dir || dir.endsWith("/.claude")) return "g"; // default dir → gmail account
   if (dir.includes("canarycoders")) return "c";
   if (dir.includes("canarypulse")) return "p";
+  if (dir.includes("kyan")) return "y";
   return "g";
 }
 
@@ -660,9 +661,10 @@ async function systemStats() {
 // key = the pane's account letter (so usage lines up with an agent); label = what the
 // strip shows. Claude accounts are namespaced C.* so codex (C) and grok (G) stay distinct.
 const USAGE_ACCOUNTS = [
-  { key: "g", label: "C.K", name: "kaiiserni", file: "/tmp/claude-usage-raw-kaiiserni.json" },
+  { key: "g", label: "C.K", name: "kai", file: "/tmp/claude-usage-raw-kai.json" },
   { key: "c", label: "C.C", name: "canarycoders", file: "/tmp/claude-usage-raw-canarycoders.json" },
   { key: "p", label: "C.P", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
+  { key: "y", label: "C.KY", name: "kyan", file: "/tmp/claude-usage-raw-kyan.json" },
 ];
 
 // Non-Claude CLIs the poller also tracks. A tool whose cache doesn't exist yet is
