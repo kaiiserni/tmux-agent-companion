@@ -6,7 +6,7 @@ import { ageLabel, Empty, ErrorBanner, TopBar } from '../components';
 import { redact, useApp } from '../context';
 import { useManualRefresh, useOverviewFull, usePanes } from '../hooks';
 import type { RootNav } from '../navigation';
-import { agentGlyph, statusColor, statusGlyph } from '../theme/glyphs';
+import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
 
 function ago(updatedAt: number): string {
@@ -99,7 +99,7 @@ export function OverviewScreen() {
                 </Text>
                 <Text style={{ color: colors.accent, fontFamily: font.regular, fontSize: 12 }}>{agentGlyph(pn.agent)}</Text>
                 <Text style={[styles.paneTarget, { color: colors.text, fontFamily: font.regular }]} numberOfLines={1}>
-                  {[pn.model, pn.account].filter(Boolean).join(' · ') || pn.target}
+                  {paneProviderMeta(pn) || pn.target}
                 </Text>
                 {!priv ? (
                   <Text style={[styles.paneAge, { color: colors.muted, fontFamily: font.regular }]}>{ageLabel(pn.age_minutes)}</Text>

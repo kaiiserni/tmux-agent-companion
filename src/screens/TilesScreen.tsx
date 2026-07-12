@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Pane } from '../api';
 import { ageLabel, Badge, Empty, ErrorBanner, paneLabel, TmuxBanner, TopBar } from '../components';
+import { paneProviderMeta } from '../theme/glyphs';
 import { redact, useApp } from '../context';
 import { useManualRefresh, usePanes } from '../hooks';
 import type { RootNav } from '../navigation';
@@ -14,7 +15,7 @@ function Tile({ pane, onPress }: { pane: Pane; onPress: () => void }) {
   const { prefs } = useApp();
   const priv = prefs.privacyMode;
   const preview = pane.summary || pane.prompt || pane.current_command || '';
-  const meta = [pane.model, pane.account].filter(Boolean).join(' · ');
+  const meta = paneProviderMeta(pane);
   return (
     <Pressable
       onPress={onPress}

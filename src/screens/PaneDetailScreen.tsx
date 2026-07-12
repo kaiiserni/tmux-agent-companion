@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Markdown } from '../markdown';
 import { useKeyboardHeight } from '../useKeyboardHeight';
 import type { RootStackParamList } from '../navigation';
-import { agentGlyph, statusColor, statusGlyph } from '../theme/glyphs';
+import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
 
 function toolSummary(e: TranscriptEntry): string {
@@ -290,10 +290,7 @@ export function PaneDetailScreen() {
           {pane?.permission_mode ? <Badge text={pane.permission_mode} color={colors.magenta} /> : null}
         </View>
         <Text style={[styles.meta, { color: colors.muted, fontFamily: font.regular }]}>
-          {pane?.target} · {pane?.agent}
-          {pane?.model ? ` · ${pane.model}` : ''}
-          {pane?.account ? ` · ${pane.account}` : ''}
-          {` · ${pane?.status}`}
+          {pane ? `${pane.target} · ${paneProviderMeta(pane)} · ${pane.status}` : paneId}
           {pane?.age_minutes != null ? ` · ${ageLabel(pane.age_minutes)}` : ''}
         </Text>
         {pane?.wait_reason ? (

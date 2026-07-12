@@ -4,7 +4,7 @@ import type { ClaudeUsage, Pane, SystemStats, UsageLimit } from './api';
 import { redact, useApp } from './context';
 import { hapticTap } from './haptics';
 import { useClaudeUsage, useSystem } from './hooks';
-import { agentGlyph, statusColor, statusGlyph } from './theme/glyphs';
+import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from './theme/glyphs';
 import { useTheme } from './theme/ThemeProvider';
 
 export function TopBar({ title, right }: { title: string; right?: React.ReactNode }) {
@@ -341,7 +341,7 @@ export function PaneRow({ pane, onPress }: { pane: Pane; onPress: () => void }) 
   const priv = prefs.privacyMode;
   const reason = redact(paneReason(pane), priv);
   const label = redact(paneLabel(pane, prefs.technicalNames), priv);
-  const meta = [pane.model, pane.account].filter(Boolean).join(' · ');
+  const meta = paneProviderMeta(pane);
   return (
     <Pressable
       onPress={onPress}

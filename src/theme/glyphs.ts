@@ -7,6 +7,8 @@ export function agentGlyph(agent: string): string {
       return '✦';
     case 'codex':
       return '◉';
+    case 'grok':
+      return '⬡';
     case 'opencode':
       return '◇';
     case 'antigravity':
@@ -16,6 +18,39 @@ export function agentGlyph(agent: string): string {
     default:
       return '·';
   }
+}
+
+// Full provider name for UI copy (never single-letter keys).
+export function agentLabel(agent: string): string {
+  switch (agent) {
+    case 'claude':
+    case 'codex':
+    case 'grok':
+    case 'opencode':
+    case 'antigravity':
+    case 'pi':
+      return agent;
+    default:
+      return agent || 'unknown';
+  }
+}
+
+const ACCOUNT_NAMES: Record<string, string> = {
+  g: 'gmail',
+  c: 'canarycoders',
+  p: 'canarypulse',
+};
+
+export function accountLabel(key: string): string {
+  return ACCOUNT_NAMES[key] ?? key;
+}
+
+// Model + Claude account line under pane titles; provider is always spelled out.
+export function paneProviderMeta(pane: { agent: string; model: string; account: string }): string {
+  const parts = [agentLabel(pane.agent)];
+  if (pane.model) parts.push(pane.model);
+  if (pane.agent === 'claude' && pane.account) parts.push(accountLabel(pane.account));
+  return parts.join(' · ');
 }
 
 // Status glyphs - mirror StatusIcons::default() in src/ui/icons.rs.
