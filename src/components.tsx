@@ -248,7 +248,7 @@ function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: ()
           onPress={(e) => e.stopPropagation()}
         >
           <View style={styles.usageHead}>
-            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>Claude usage</Text>
+            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>Agent usage</Text>
             <Pressable onPress={onClose} hitSlop={10}>
               <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
             </Pressable>

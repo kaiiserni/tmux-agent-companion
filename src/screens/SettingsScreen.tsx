@@ -23,7 +23,7 @@ const PREF_LABELS: Record<keyof Prefs, string> = {
   respondedNewestFirst: 'Responded newest first',
   soundAlerts: 'Sound alerts',
   showSystemStats: 'CPU / memory bar',
-  showClaudeUsage: 'Claude usage bar',
+  showClaudeUsage: 'Agent usage bar',
 };
 
 export function SettingsScreen({
