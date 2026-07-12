@@ -663,9 +663,13 @@ const USAGE_ACCOUNTS = [
   { key: "p", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
 ];
 
-// Non-Claude CLIs the poller also tracks. They report what's LEFT (not used) and
-// give a human string instead of an ISO reset, hence resets_text.
-const USAGE_TOOLS = [{ key: "x", name: "codex", file: "/tmp/codex-usage-raw.json" }];
+// Non-Claude CLIs the poller also tracks. A tool whose cache doesn't exist yet is
+// skipped, so grok lights up on its own the moment the poller writes the file.
+// Letters avoid the account keys (g/c/p): x = codex, r = grok.
+const USAGE_TOOLS = [
+  { key: "x", name: "codex", file: "/tmp/codex-usage-raw.json" },
+  { key: "r", name: "grok", file: "/tmp/grok-usage-raw.json" },
+];
 
 interface UsageLimit {
   kind: string;
@@ -685,22 +689,34 @@ function severityFor(percent: number): string {
 
 function usageForTool(file: string) {
   const j = JSON.parse(readFileSync(file, "utf8"));
-  const lim = (leftKey: string, resetKey: string, kind: string, group: string): UsageLimit | null => {
-    const left = j[leftKey];
-    if (typeof left !== "number") return null;
-    const percent = Math.max(0, Math.min(100, 100 - left));
+  const num = (...keys: string[]) => {
+    for (const k of keys) if (typeof j[k] === "number") return j[k] as number;
+    return null;
+  };
+  const str = (...keys: string[]) => {
+    for (const k of keys) if (typeof j[k] === "string") return j[k] as string;
+    return null;
+  };
+  // codex reports what's LEFT; a tool reporting what's USED works too.
+  const lim = (base: string, kind: string, group: string): UsageLimit | null => {
+    const left = num(`${base}_left`, `${base}_remaining`);
+    const used = num(`${base}_used`, `${base}_percent`, `${base}_utilization`);
+    const raw = left != null ? 100 - left : used;
+    if (raw == null) return null;
+    const percent = Math.max(0, Math.min(100, Math.round(raw)));
+    const iso = str(`${base}_resets_at`);
     return {
       kind,
       group,
       percent,
       severity: severityFor(percent),
-      resets_at: null,
-      resets_text: typeof j[resetKey] === "string" ? j[resetKey] : null,
+      resets_at: iso,
+      resets_text: iso ? null : str(`${base}_resets`, `${base}_reset`),
       model: null,
     };
   };
-  const session = lim("five_hour_left", "five_hour_resets", "session", "session");
-  const weekly = lim("weekly_left", "weekly_resets", "weekly_all", "weekly");
+  const session = lim("five_hour", "session", "session");
+  const weekly = lim("weekly", "weekly_all", "weekly");
   const limits = [session, weekly].filter((l): l is UsageLimit => l !== null);
   if (limits.length === 0) throw new Error("no usable fields");
   return {

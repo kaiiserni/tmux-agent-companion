@@ -95,18 +95,18 @@ export function StatsStrip() {
             }}
             style={({ pressed }) => [styles.statsRow, { opacity: pressed ? 0.6 : 1 }]}
           >
-            <Text style={{ fontFamily: font.regular, fontSize: 12, flex: 1 }}>
-              <Text style={{ color: colors.muted }}>USG </Text>
+            <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>USG</Text>
+            {/* wrap per entry, so a 5th tool never breaks mid-percentage */}
+            <View style={styles.usageEntries}>
               {usage.data.accounts.map((a) => (
-                <Text key={a.key}>
+                <Text key={a.key} style={{ fontFamily: font.regular, fontSize: 12 }}>
                   <Text style={{ color: colors.dim }}>{a.key.toUpperCase()} </Text>
                   <Text style={{ color: sevColor(a.session, colors) }}>{pctText(a.session)}</Text>
                   <Text style={{ color: colors.muted }}>/</Text>
                   <Text style={{ color: sevColor(a.weekly, colors) }}>{pctText(a.weekly)}</Text>
-                  <Text>{'  '}</Text>
                 </Text>
               ))}
-            </Text>
+            </View>
             <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
           </Pressable>
           <UsageModal visible={usageOpen} onClose={() => setUsageOpen(false)} usage={usage.data} />
@@ -386,6 +386,7 @@ const styles = StyleSheet.create({
   error: { fontSize: 13, paddingHorizontal: 16, paddingTop: 10 },
   stats: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, gap: 6, marginHorizontal: 12, marginTop: 14, marginBottom: 10 },
   statsRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  usageEntries: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 3 },
   usageBackdrop: { flex: 1, backgroundColor: '#000000aa', alignItems: 'center', justifyContent: 'center', padding: 20 },
   usageSheet: { width: '100%', maxWidth: 420, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   usageHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
