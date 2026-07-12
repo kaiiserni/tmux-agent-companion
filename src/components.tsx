@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { ClaudeUsage, Pane, UsageLimit } from './api';
+import type { ClaudeUsage, Pane, SystemStats, UsageLimit } from './api';
 import { redact, useApp } from './context';
 import { hapticTap } from './haptics';
 import { useClaudeUsage, useSystem } from './hooks';
@@ -46,6 +46,7 @@ export function StatsStrip() {
   const sys = useSystem(prefs.showSystemStats);
   const usage = useClaudeUsage(prefs.showClaudeUsage);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [sysOpen, setSysOpen] = useState(false);
   if (!prefs.showSystemStats && !prefs.showClaudeUsage) return null;
   if (!sys.data && !usage.data) return null;
 
@@ -67,11 +68,23 @@ export function StatsStrip() {
   return (
     <View style={[styles.stats, { borderColor: colors.border, backgroundColor: colors.deepest }]}>
       {prefs.showSystemStats && sys.data ? (
-        <View style={styles.statsRow}>
-          {metric('CPU', sys.data.cpu)}
-          {metric('MEM', sys.data.mem.percent)}
-          <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12 }}>↑{sys.data.load[0]?.toFixed(1)}</Text>
-        </View>
+        <>
+          <Pressable
+            onPress={() => {
+              hapticTap();
+              setSysOpen(true);
+            }}
+            style={({ pressed }) => [styles.statsRow, { opacity: pressed ? 0.6 : 1 }]}
+          >
+            {metric('CPU', sys.data.cpu)}
+            {metric('MEM', sys.data.mem.percent)}
+            <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12, flex: 1 }}>
+              ↑{sys.data.load[0]?.toFixed(1)}
+            </Text>
+            <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
+          </Pressable>
+          <SystemModal visible={sysOpen} onClose={() => setSysOpen(false)} sys={sys.data} />
+        </>
       ) : null}
       {prefs.showClaudeUsage && usage.data ? (
         <>
@@ -129,6 +142,92 @@ function limitLabel(l: UsageLimit): string {
   if (l.kind === 'weekly_all') return '7d all';
   if (l.kind === 'weekly_scoped') return `7d ${l.model ?? 'scoped'}`;
   return l.kind;
+}
+
+const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)}G`;
+
+function upFor(sec: number): string {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function SystemModal({ visible, onClose, sys }: { visible: boolean; onClose: () => void; sys: SystemStats }) {
+  const { colors, font } = useTheme();
+  const col = (p: number) => (p >= 85 ? colors.attention : p >= 60 ? colors.waiting : colors.running);
+  const bar = (p: number, width = 10) => {
+    const fill = Math.max(0, Math.min(width, Math.round((p / 100) * width)));
+    return '█'.repeat(fill) + '░'.repeat(width - fill);
+  };
+  const row = (label: string, p: number, right: string) => (
+    <View style={styles.usageLine}>
+      <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11, width: 84 }} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={{ color: col(p), fontFamily: font.regular, fontSize: 11 }}>{bar(p)}</Text>
+      <Text style={{ color: col(p), fontFamily: font.medium, fontSize: 11, width: 38, textAlign: 'right' }}>{`${Math.round(p)}%`}</Text>
+      <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, flex: 1, textAlign: 'right' }} numberOfLines={1}>
+        {right}
+      </Text>
+    </View>
+  );
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.usageBackdrop} onPress={onClose}>
+        <Pressable
+          style={[styles.usageSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={styles.usageHead}>
+            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>System</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={{ maxHeight: 460 }}>
+            <View style={styles.usageAcct}>
+              <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
+                CPU · {sys.cores.length} cores · load {sys.load.map((l) => l.toFixed(1)).join(' ')}
+              </Text>
+              {row('total', sys.cpu, `up ${upFor(sys.uptime)}`)}
+              {sys.cores.map((c, i) => row(`core ${i}`, c, ''))}
+            </View>
+
+            <View style={styles.usageAcct}>
+              <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Memory</Text>
+              {row('used', sys.mem.percent, `${gb(sys.mem.used)} / ${gb(sys.mem.total)}`)}
+              {sys.mem.cached > 0 ? (
+                <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 10, marginTop: 4 }}>
+                  cached {gb(sys.mem.cached)} · available {gb(sys.mem.available)}
+                </Text>
+              ) : null}
+              {sys.swap ? row('swap', sys.swap.percent, `${gb(sys.swap.used)} / ${gb(sys.swap.total)}`) : null}
+            </View>
+
+            {sys.top.length > 0 ? (
+              <View style={styles.usageAcct}>
+                <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Top processes</Text>
+                {sys.top.map((p, i) => (
+                  <View key={`${p.name}-${i}`} style={styles.usageLine}>
+                    <Text style={{ color: colors.text, fontFamily: font.regular, fontSize: 11, flex: 1 }} numberOfLines={1}>
+                      {p.name}
+                    </Text>
+                    <Text style={{ color: col(p.cpu), fontFamily: font.medium, fontSize: 11, width: 52, textAlign: 'right' }}>
+                      {p.cpu.toFixed(1)}%
+                    </Text>
+                    <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, width: 56, textAlign: 'right' }}>
+                      {p.mem.toFixed(1)}% mem
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
 }
 
 function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: () => void; usage: ClaudeUsage }) {

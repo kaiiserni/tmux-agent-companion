@@ -133,10 +133,19 @@ export const getTranscript = (b: string, paneId: string, limit = 40) =>
 export const getScreen = (b: string, paneId: string) =>
   get<{ pane_id: string; text: string }>(b, `/screen?pane_id=${encodeURIComponent(paneId)}`);
 
+export interface TopProc {
+  name: string;
+  cpu: number;
+  mem: number;
+}
 export interface SystemStats {
   cpu: number;
-  mem: { used: number; total: number; percent: number };
+  cores: number[];
+  mem: { used: number; total: number; percent: number; cached: number; available: number };
+  swap: { used: number; total: number; percent: number } | null;
   load: number[];
+  uptime: number;
+  top: TopProc[];
 }
 export interface UsageLimit {
   kind: string;

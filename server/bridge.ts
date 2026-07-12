@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { cpus, freemem, homedir, loadavg, totalmem } from "node:os";
+import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
@@ -571,12 +571,88 @@ function memStats() {
       /* fall through to os */
     }
   }
+  // Linux freemem() is MemFree, which counts the page cache as used - MemAvailable is
+  // what's actually reclaimable, and matches what free(1)/htop report.
+  if (process.platform === "linux") {
+    try {
+      const info = readFileSync("/proc/meminfo", "utf8");
+      const kb = (key: string) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+) kB`, "m"))?.[1] ?? 0) * 1024;
+      const avail = kb("MemAvailable");
+      if (avail > 0) {
+        const used = total - avail;
+        return { used, total, percent: Math.round((used / total) * 100), cached: kb("Cached"), available: avail };
+      }
+    } catch {
+      /* fall through to os */
+    }
+  }
   const used = total - freemem();
-  return { used, total, percent: Math.round((used / total) * 100) };
+  return { used, total, percent: Math.round((used / total) * 100), cached: 0, available: freemem() };
+}
+
+function swapStats() {
+  if (process.platform !== "linux") return null;
+  try {
+    const info = readFileSync("/proc/meminfo", "utf8");
+    const kb = (key: string) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+) kB`, "m"))?.[1] ?? 0) * 1024;
+    const total = kb("SwapTotal");
+    if (total <= 0) return null;
+    const used = total - kb("SwapFree");
+    return { used, total, percent: Math.round((used / total) * 100) };
+  } catch {
+    return null;
+  }
+}
+
+// Per-core deltas from the same pair of samples the overall % uses.
+async function corePercents(): Promise<number[]> {
+  const a = cpus();
+  await new Promise((r) => setTimeout(r, 200));
+  const b = cpus();
+  return b.map((c, i) => {
+    const pa = a[i]?.times;
+    if (!pa) return 0;
+    const sum = (t: typeof c.times) => t.user + t.nice + t.sys + t.idle + t.irq;
+    const dt = sum(c.times) - sum(pa);
+    const di = c.times.idle - pa.idle;
+    return dt <= 0 ? 0 : Math.max(0, Math.min(100, Math.round((1 - di / dt) * 100)));
+  });
+}
+
+// Heaviest processes - the reason you'd open the CPU/mem detail in the first place.
+function topProcs() {
+  const args =
+    process.platform === "darwin"
+      ? ["ps", "-Aco", "comm=,pcpu=,pmem=", "-r"]
+      : ["ps", "-eo", "comm=,pcpu=,pmem=", "--sort=-pcpu"];
+  try {
+    const out = Bun.spawnSync(args).stdout.toString();
+    return out
+      .trimEnd()
+      .split("\n")
+      .slice(0, 6)
+      .map((line) => {
+        const m = line.trim().match(/^(.*?)\s+([\d.]+)\s+([\d.]+)$/);
+        if (!m) return null;
+        return { name: m[1]!.split("/").pop()!, cpu: Number(m[2]), mem: Number(m[3]) };
+      })
+      .filter((p): p is { name: string; cpu: number; mem: number } => p !== null);
+  } catch {
+    return [];
+  }
 }
 
 async function systemStats() {
-  return { cpu: await cpuPercent(), mem: memStats(), load: loadavg().map((n) => Math.round(n * 100) / 100) };
+  const [cpu, cores] = await Promise.all([cpuPercent(), corePercents()]);
+  return {
+    cpu,
+    cores,
+    mem: memStats(),
+    swap: swapStats(),
+    load: loadavg().map((n) => Math.round(n * 100) / 100),
+    uptime: Math.round(uptime()),
+    top: topProcs(),
+  };
 }
 
 // The usage poller writes one cache per Claude account. Keys match the account
