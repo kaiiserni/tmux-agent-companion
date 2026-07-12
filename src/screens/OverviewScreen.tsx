@@ -1,8 +1,10 @@
 import { useNavigation } from '@react-navigation/native';
+import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { Pane } from '../api';
 import { ageLabel, Empty, ErrorBanner, TopBar } from '../components';
 import { redact, useApp } from '../context';
-import { useManualRefresh, useOverviewFull } from '../hooks';
+import { useManualRefresh, useOverviewFull, usePanes } from '../hooks';
 import type { RootNav } from '../navigation';
 import { agentGlyph, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
@@ -23,6 +25,18 @@ export function OverviewScreen() {
   const q = useOverviewFull();
   const refresh = useManualRefresh(q.refetch);
   const ov = q.data;
+  // overview.json ships an empty panes[] per project, so pair the live panes to a
+  // project by name instead - that's what makes a block tappable.
+  const panesQ = usePanes();
+  const panesByProject = useMemo(() => {
+    const m = new Map<string, Pane[]>();
+    for (const p of panesQ.data?.panes ?? []) {
+      const arr = m.get(p.project) ?? [];
+      arr.push(p);
+      m.set(p.project, arr);
+    }
+    return m;
+  }, [panesQ.data]);
 
   if (q.isLoading) {
     return (
@@ -62,6 +76,25 @@ export function OverviewScreen() {
               <Text style={[styles.projName, { color: colors.text, fontFamily: font.bold }]}>▍{p.name}</Text>
               {p.attention ? <Text style={{ color: colors.attention, fontFamily: font.medium, fontSize: 12 }}>⚠ needs you</Text> : null}
             </View>
+            {(panesByProject.get(p.name) ?? []).map((pn) => (
+              <Pressable
+                key={pn.pane_id}
+                onPress={() => nav.navigate('PaneDetail', { paneId: pn.pane_id, title: p.name })}
+                style={({ pressed }) => [styles.paneRow, { borderColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Text style={{ color: statusColor(pn.status, colors), fontFamily: font.regular, fontSize: 12 }}>
+                  {statusGlyph(pn.status)}
+                </Text>
+                <Text style={{ color: colors.accent, fontFamily: font.regular, fontSize: 12 }}>{agentGlyph(pn.agent)}</Text>
+                <Text style={[styles.paneTarget, { color: colors.text, fontFamily: font.regular }]} numberOfLines={1}>
+                  {[pn.model, pn.account].filter(Boolean).join(' · ') || pn.target}
+                </Text>
+                {!priv ? (
+                  <Text style={[styles.paneAge, { color: colors.muted, fontFamily: font.regular }]}>{ageLabel(pn.age_minutes)}</Text>
+                ) : null}
+                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
+              </Pressable>
+            ))}
             {p.doing ? (
               <Text style={[styles.doing, { color: colors.dim, fontFamily: font.regular }]}>{redact(p.doing, priv)}</Text>
             ) : null}
@@ -73,25 +106,6 @@ export function OverviewScreen() {
             ))}
             {p.active_md?.map((m, i) => (
               <Text key={i} style={[styles.activeMd, { color: colors.muted, fontFamily: font.regular }]}>{redact(m, priv)}</Text>
-            ))}
-            {p.panes?.map((pn) => (
-              <Pressable
-                key={pn.pane_id}
-                onPress={() => nav.navigate('PaneDetail', { paneId: pn.pane_id, title: p.name })}
-                style={({ pressed }) => [styles.paneRow, { borderTopColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
-              >
-                <Text style={{ color: statusColor(pn.status, colors), fontFamily: font.regular, fontSize: 12 }}>
-                  {statusGlyph(pn.status)}
-                </Text>
-                <Text style={{ color: colors.accent, fontFamily: font.regular, fontSize: 12 }}>{agentGlyph(pn.agent)}</Text>
-                <Text style={[styles.paneTarget, { color: colors.text, fontFamily: font.medium }]} numberOfLines={1}>
-                  {pn.target}
-                </Text>
-                {!priv ? (
-                  <Text style={[styles.paneAge, { color: colors.muted, fontFamily: font.regular }]}>{ageLabel(pn.age_minutes)}</Text>
-                ) : null}
-                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 13 }}>›</Text>
-              </Pressable>
             ))}
           </View>
         ))}
@@ -137,9 +151,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingTop: 7,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
     marginTop: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   paneTarget: { fontSize: 12, flex: 1 },
   paneAge: { fontSize: 11 },
