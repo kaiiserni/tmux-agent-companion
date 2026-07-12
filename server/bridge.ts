@@ -657,18 +657,20 @@ async function systemStats() {
 
 // The usage poller writes one cache per Claude account. Keys match the account
 // labels used on panes (see accountLabel), so the app can line usage up per agent.
+// key = the pane's account letter (so usage lines up with an agent); label = what the
+// strip shows. Claude accounts are namespaced C.* so codex (C) and grok (G) stay distinct.
 const USAGE_ACCOUNTS = [
-  { key: "g", name: "kaiiserni", file: "/tmp/claude-usage-raw-kaiiserni.json" },
-  { key: "c", name: "canarycoders", file: "/tmp/claude-usage-raw-canarycoders.json" },
-  { key: "p", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
+  { key: "g", label: "C.K", name: "kaiiserni", file: "/tmp/claude-usage-raw-kaiiserni.json" },
+  { key: "c", label: "C.C", name: "canarycoders", file: "/tmp/claude-usage-raw-canarycoders.json" },
+  { key: "p", label: "C.P", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
 ];
 
 // Non-Claude CLIs the poller also tracks. A tool whose cache doesn't exist yet is
 // skipped, so grok lights up on its own the moment the poller writes the file.
 // Letters avoid the account keys (g/c/p): x = codex, r = grok.
 const USAGE_TOOLS = [
-  { key: "x", name: "codex", file: "/tmp/codex-usage-raw.json" },
-  { key: "r", name: "grok", file: "/tmp/grok-usage-raw.json" },
+  { key: "x", label: "C", name: "codex", file: "/tmp/codex-usage-raw.json" },
+  { key: "r", label: "G", name: "grok", file: "/tmp/grok-usage-raw.json" },
 ];
 
 interface UsageLimit {
@@ -754,15 +756,25 @@ function usageForAccount(file: string) {
 function claudeUsage() {
   const accounts = USAGE_ACCOUNTS.map((a) => {
     try {
-      return { key: a.key, name: a.name, ...usageForAccount(a.file) };
+      return { key: a.key, label: a.label, name: a.name, ...usageForAccount(a.file) };
     } catch {
-      return { key: a.key, name: a.name, updated_at: 0, plan: null, session: null, weekly: null, weekly_scoped: null, limits: [] };
+      return {
+        key: a.key,
+        label: a.label,
+        name: a.name,
+        updated_at: 0,
+        plan: null,
+        session: null,
+        weekly: null,
+        weekly_scoped: null,
+        limits: [],
+      };
     }
   });
   // A tool the poller isn't tracking (yet) is simply absent, not an empty row.
   const tools = USAGE_TOOLS.flatMap((t) => {
     try {
-      return [{ key: t.key, name: t.name, ...usageForTool(t.file) }];
+      return [{ key: t.key, label: t.label, name: t.name, ...usageForTool(t.file) }];
     } catch {
       return [];
     }

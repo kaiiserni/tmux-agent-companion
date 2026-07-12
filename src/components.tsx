@@ -100,7 +100,7 @@ export function StatsStrip() {
             <View style={styles.usageEntries}>
               {usage.data.accounts.map((a) => (
                 <Text key={a.key} style={{ fontFamily: font.regular, fontSize: 12 }}>
-                  <Text style={{ color: colors.dim }}>{a.key.toUpperCase()} </Text>
+                  <Text style={{ color: colors.dim }}>{a.label} </Text>
                   <Text style={{ color: sevColor(a.session, colors) }}>{pctText(a.session)}</Text>
                   <Text style={{ color: colors.muted }}>/</Text>
                   <Text style={{ color: sevColor(a.weekly, colors) }}>{pctText(a.weekly)}</Text>
@@ -257,7 +257,7 @@ function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: ()
             {usage.accounts.map((a) => (
               <View key={a.key} style={styles.usageAcct}>
                 <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
-                  {a.key.toUpperCase()} · {a.name}
+                  {a.label} · {a.name}
                   {a.plan ? ` · ${a.plan}` : ''}
                 </Text>
                 {a.limits.length === 0 ? (

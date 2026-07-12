@@ -159,7 +159,9 @@ export interface UsageLimit {
 }
 // One entry per Claude account; `key` matches a pane's `account` (g/c/p).
 export interface UsageAccount {
+  // key matches a pane's `account`; label is the strip's display name (C.K, G, ...).
   key: string;
+  label: string;
   name: string;
   updated_at: number;
   plan: string | null;
