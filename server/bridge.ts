@@ -270,12 +270,15 @@ function readEnvVar(pid: number, name: string): string | null {
   return null;
 }
 
+// Keys mirror ~/lib/claude-usage-poll.sh (LABELS/NAMES/DIRS) - keep both in step.
+// kaibot must be matched before the fallback, or its panes read as the gmail account.
 function accountLabel(dir: string | null): string {
   if (!dir || dir.endsWith("/.claude")) return "g"; // default dir → gmail account
   if (dir.includes("canarycoders")) return "c";
   if (dir.includes("canarypulse")) return "p";
+  if (dir.includes("kaibot")) return "b";
   if (dir.includes("kyan")) return "y";
-  return "g";
+  return "g"; // incl. ~/.claude-iserni - the gmail account's own dir
 }
 
 // The fish wrapper sets CLAUDE_CONFIG_DIR then exec's `node claude`, so the var
@@ -535,6 +538,15 @@ function capture(paneId: string, lines: number): string {
     .replace(/\n+$/, "");
 }
 
+// Screen tab wants real colors - "-e" keeps the SGR escapes tmux stores per cell.
+// /prompt's parseMenu() needs plain text (escapes would break its regexes), so
+// that path keeps using capture() above.
+function captureAnsi(paneId: string, lines: number): string {
+  const { ok, out } = tmux(["capture-pane", "-e", "-p", "-t", paneId, "-S", `-${lines}`]);
+  if (!ok) return "";
+  return out.replace(/\n+$/, "");
+}
+
 // --- system stats + Claude usage ---------------------------------------------
 
 function cpuSnapshot() {
@@ -665,6 +677,7 @@ const USAGE_ACCOUNTS = [
   { key: "c", label: "C.C", name: "canarycoders", file: "/tmp/claude-usage-raw-canarycoders.json" },
   { key: "p", label: "C.P", name: "canarypulse", file: "/tmp/claude-usage-raw-canarypulse.json" },
   { key: "y", label: "C.KY", name: "kyan", file: "/tmp/claude-usage-raw-kyan.json" },
+  { key: "b", label: "C.KB", name: "kaibot", file: "/tmp/claude-usage-raw-kaibot.json" },
 ];
 
 // Non-Claude CLIs the poller also tracks. A tool whose cache doesn't exist yet is
@@ -919,6 +932,8 @@ interface TermData {
   rows: number;
   termSession?: string;
   child?: ReturnType<typeof Bun.spawn>;
+  // set only when WE zoomed the pane on open, so close restores exactly what we changed
+  zoomed?: boolean;
 }
 
 // Frame control messages onto the sidecar's stdin: [type:1][len:4 BE][payload].
@@ -954,7 +969,8 @@ var term=new Terminal({fontFamily:'SauceCodePro, Menlo, Monaco, monospace',fontS
 var FA=(window.FitAddon&&window.FitAddon.FitAddon)||window.FitAddon;
 var fit=new FA();term.loadAddon(fit);term.open(document.getElementById('t'));
 try{fit.fit();}catch(e){}
-var ctrl=false, alt=false, mouse=false;
+// shift: 0 = off, 1 = one-shot, 2 = locked (tap cycles through the three)
+var ctrl=false, alt=false, shift=0, prefixArmed=false, mouse=true;
 function wsurl(){return (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/terminal?pane_id='+encodeURIComponent(params.get('pane_id')||'')+'&token='+encodeURIComponent(params.get('token')||'')+'&cols='+term.cols+'&rows='+term.rows;}
 var ws;
 function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o));}
@@ -965,49 +981,122 @@ function connect(){ws=new WebSocket(wsurl());ws.binaryType='arraybuffer';
   ws.onmessage=function(e){term.write(typeof e.data==='string'?e.data:new Uint8Array(e.data));};
   ws.onclose=function(){term.write(CRLF+'[disconnected - reconnecting]'+CRLF);setTimeout(connect,1500);};
 }
-function syncMods(){document.getElementById('bctrl').className=ctrl?'on':'';document.getElementById('balt').className=alt?'on':'';}
-// ctrl transforms the raw first char; alt prefixes ESC afterwards, so ctrl+alt composes.
-function applyMods(d){
-  if(ctrl){var c=d.charCodeAt(0);if(c>=97&&c<=122)d=String.fromCharCode(c-96)+d.slice(1);else if(c>=64&&c<=95)d=String.fromCharCode(c-64)+d.slice(1);}
-  if(alt)d=ESC+d;
-  if(ctrl||alt){ctrl=false;alt=false;syncMods();}
+function syncMods(){
+  document.getElementById('bctrl').className=ctrl?'on':'';
+  document.getElementById('balt').className=alt?'on':'';
+  document.getElementById('bshift').className=shift===2?'lock':shift===1?'on':'';
+  document.getElementById('bprefix').className=prefixArmed?'tmux on':'tmux';
+}
+// Shift matters here mostly for shift+tab (ESC[Z, back-tab) - Claude Code cycles its
+// permission modes with it. Letters are handled too, for the hardware-keyboard case.
+function applyShift(d){
+  if(d===KEYS.tab)return ESC+'[Z';
+  if(d.length===1){var c=d.charCodeAt(0);if(c>=97&&c<=122)return d.toUpperCase();}
   return d;
 }
-term.onData(function(d){input(applyMods(d));});
-var KEYS={esc:ESC,tab:String.fromCharCode(9),up:ESC+'[A',down:ESC+'[B',left:ESC+'[D',right:ESC+'[C',cc:String.fromCharCode(3),cd:String.fromCharCode(4),cz:String.fromCharCode(26),home:ESC+'[H',end:ESC+'[F',pgup:ESC+'[5~',pgdn:ESC+'[6~',pipe:'|',tilde:'~',slash:'/',dash:'-'};
+// shift first (it rewrites the character), then ctrl (maps it to a control code), then
+// alt (prefixes ESC), so the three compose. One-shot latches clear; shift-lock stays.
+// prefix is a one-shot latch too: tmux already holds prefix state after the NUL, but
+// without a latch the button gives no "armed" feedback and the next tap looks unbound.
+function applyMods(d){
+  if(shift)d=applyShift(d);
+  if(ctrl){var c=d.charCodeAt(0);if(c>=97&&c<=122)d=String.fromCharCode(c-96)+d.slice(1);else if(c>=64&&c<=95)d=String.fromCharCode(c-64)+d.slice(1);}
+  if(alt)d=ESC+d;
+  if(shift===1)shift=0;
+  ctrl=false;alt=false;prefixArmed=false;
+  syncMods();
+  return d;
+}
+// xterm reports focus in/out as ESC[I / ESC[O through onData (tmux runs with
+// focus-events on). They are not keystrokes: the term.focus() after every bar tap
+// fires one, which would eat the pending ctrl/alt/prefix latch — and a report sent
+// right after the prefix NUL cancels tmux's pending prefix outright. Drop them.
+term.onData(function(d){
+  if(d===ESC+'[I'||d===ESC+'[O')return;
+  input(applyMods(d));
+});
+// prefix = tmux's custom prefix (set -g prefix C-Space, ~/.tmux.conf) - Ctrl+Space
+// sends NUL. Combo buttons chain prefix + a bound key so the whole tmux binding
+// fires from one tap, e.g. prefix+F = zoom pane, prefix+? = which-key popup
+// (every binding in ~/.tmux.conf, searchable - the escape hatch for anything
+// not given its own button here).
+var KEYS={esc:ESC,tab:String.fromCharCode(9),cc:String.fromCharCode(3),cd:String.fromCharCode(4),cz:String.fromCharCode(26),pipe:'|',tilde:'~',slash:'/',dash:'-',prefix:String.fromCharCode(0)};
 function fontDelta(n){term.options.fontSize=Math.max(8,Math.min(20,term.options.fontSize+n));doFit();}
 Array.prototype.forEach.call(document.querySelectorAll('#bar button'),function(b){
   b.addEventListener('click',function(ev){ev.preventDefault();
-    var k=b.getAttribute('data-k'),m=b.getAttribute('data-mod');
-    if(k){input(applyMods(KEYS[k]));}
+    var k=b.getAttribute('data-k'),m=b.getAttribute('data-mod'),cb=b.getAttribute('data-combo');
+    if(m==='prefix'){
+      // arm (send NUL) or disarm (Esc cancels tmux's pending prefix)
+      if(prefixArmed){input(ESC);prefixArmed=false;}
+      else{input(KEYS.prefix);prefixArmed=true;}
+      syncMods();
+    }
+    else if(cb){cb.split('+').forEach(function(tok){input(KEYS[tok]!=null?KEYS[tok]:tok);});}
+    else if(k){input(applyMods(KEYS[k]));}
     else if(m==='ctrl'){ctrl=!ctrl;syncMods();}
     else if(m==='alt'){alt=!alt;syncMods();}
+    else if(m==='shift'){shift=(shift+1)%3;syncMods();} // off → one-shot → lock
     else if(b.id==='bmouse'){mouse=!mouse;send({t:'m',c:mouse?1:0});b.className=mouse?'on':'';}
     else if(b.id==='bfdn'){fontDelta(-1);}
     else if(b.id==='bfup'){fontDelta(1);}
     term.focus();
   });
 });
+// tmux runs in the alternate screen, where xterm keeps no scrollback of its own - the
+// only way back is tmux copy-mode, which it enters on a mouse-wheel report. A finger
+// drag produces no wheel event (Safari doesn't synthesize one), so translate vertical
+// swipes into SGR wheel reports ourselves. Guarded on mouse mode: with it off tmux
+// doesn't grab these and the escape sequence would land in the pane as junk.
+var touchY=null, touchAcc=0;
+var tEl=document.getElementById('t');
+var SWIPE_STEP=18; // px per reported wheel notch, roughly one row
+tEl.addEventListener('touchstart',function(e){
+  if(e.touches.length===1){touchY=e.touches[0].clientY;touchAcc=0;}
+},{passive:true});
+tEl.addEventListener('touchmove',function(e){
+  if(!mouse||touchY===null||e.touches.length!==1)return;
+  var y=e.touches[0].clientY;
+  touchAcc+=y-touchY;
+  touchY=y;
+  while(Math.abs(touchAcc)>=SWIPE_STEP){
+    var up=touchAcc>0; // dragging down reveals older output = scroll up
+    input(ESC+'[<'+(up?64:65)+';1;1M');
+    touchAcc-=up?SWIPE_STEP:-SWIPE_STEP;
+  }
+},{passive:true});
+tEl.addEventListener('touchend',function(){touchY=null;touchAcc=0;},{passive:true});
 window.addEventListener('resize',doFit);connect();
 `;
 
+// One row, scrolled sideways: it keeps the terminal as tall as possible. Group
+// separators + an edge fade (see #barwrap:after) signal there is more to the right.
+// tmux group mirrors the most reached-for bindings in ~/.tmux.conf; "?" opens
+// which-key for the rest. No arrows/home/end/pgup/pgdn: vim keys cover navigation.
 const TERM_BAR =
+  '<div id=barwrap>' +
   '<div id=bar>' +
-  '<button data-k=esc>esc</button><button data-k=tab>tab</button>' +
-  '<button id=bctrl data-mod=ctrl>ctrl</button><button id=balt data-mod=alt>alt</button>' +
-  '<button data-k=up>↑</button><button data-k=down>↓</button><button data-k=left>←</button><button data-k=right>→</button>' +
-  '<button data-k=cc>^C</button><button data-k=cd>^D</button><button data-k=cz>^Z</button>' +
-  '<button data-k=home>home</button><button data-k=end>end</button><button data-k=pgup>pgup</button><button data-k=pgdn>pgdn</button>' +
-  '<button data-k=pipe>|</button><button data-k=tilde>~</button><button data-k=slash>/</button><button data-k=dash>-</button>' +
-  '<button id=bmouse>🖱 mouse</button><button id=bfdn>A−</button><button id=bfup>A+</button>' +
+  '<div class=grp><button data-k=cc>^C</button><button data-k=cd>^D</button><button data-k=cz>^Z</button><button data-k=esc>esc</button><button data-k=tab>tab</button></div>' +
+  '<div class=grp><button id=bshift data-mod=shift>⇧</button><button id=bctrl data-mod=ctrl>ctrl</button><button id=balt data-mod=alt>alt</button><button data-k=pipe>|</button><button data-k=tilde>~</button><button data-k=slash>/</button><button data-k=dash>-</button></div>' +
+  '<div class=grp><button id=bprefix data-mod=prefix class=tmux>prefix</button><button data-combo="prefix+?" class=tmux>?</button><button data-combo="prefix+F" class=tmux>zoom</button><button data-combo="prefix+a" class=tmux>search</button><button data-combo="prefix+s" class=tmux>tree</button></div>' +
+  '<div class=grp><button id=bmouse class=on>🖱 mouse</button><button id=bfdn>A−</button><button id=bfup>A+</button></div>' +
+  '</div>' +
   '</div>';
 
 const TERM_STYLE =
   "html,body{margin:0;height:100%;background:#1a1b26;overflow:hidden}" +
   "body{display:flex;flex-direction:column}#t{flex:1;min-height:0;padding:2px}" +
-  "#bar{display:flex;gap:6px;padding:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#15161e;border-top:1px solid #414868;flex:none}" +
-  "#bar button{flex:none;font:600 13px/1 SauceCodePro,Menlo,monospace;color:#a9b1d6;background:#24283b;border:1px solid #414868;border-radius:7px;padding:9px 11px;min-width:34px}" +
+  // wrapper carries the background + the right-edge fade that hints at more buttons
+  "#barwrap{position:relative;flex:none;background:#15161e;border-top:1px solid #414868}" +
+  "#barwrap:after{content:'';position:absolute;top:0;right:0;bottom:0;width:22px;pointer-events:none;background:linear-gradient(to right,rgba(21,22,30,0),#15161e)}" +
+  "#bar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px 10px;padding:6px 8px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}" +
+  "#bar::-webkit-scrollbar{display:none}" +
+  ".grp{display:flex;flex:none;gap:6px;padding-right:10px;border-right:1px solid #2a2f45}" +
+  ".grp:last-child{border-right:none;padding-right:0}" +
+  "#bar button{flex:none;font:600 13px/1 SauceCodePro,Menlo,monospace;color:#a9b1d6;background:#24283b;border:1px solid #414868;border-radius:7px;padding:10px 12px;min-width:36px;min-height:36px}" +
+  "#bar button.tmux{color:#7aa2f7;border-color:#3b4261}" +
   "#bar button.on{color:#1a1b26;background:#7aa2f7;border-color:#7aa2f7}" +
+  // shift-lock: distinct from a one-shot shift, which uses .on like ctrl/alt
+  "#bar button.lock{color:#1a1b26;background:#e0af68;border-color:#e0af68}" +
   "@font-face{font-family:'SauceCodePro';src:url('/term-font.ttf') format('truetype');font-display:swap}";
 
 function buildTermHtml(): string {
@@ -1035,7 +1124,13 @@ const TERM_FONT: ArrayBuffer | null = (() => {
 
 function htmlResponse(html: string): Response {
   return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8", "Access-Control-Allow-Origin": "*" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      // WKWebView caches this page across app launches, so a bridge-side change to
+      // the key bar would otherwise never reach the phone.
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -1115,7 +1210,7 @@ Bun.serve<TermData>({
       const pane = url.searchParams.get("pane_id");
       if (!pane) return json({ error: "pane_id required" }, 400);
       const lines = Number(url.searchParams.get("lines") ?? "60");
-      return json({ pane_id: pane, text: capture(pane, lines) });
+      return json({ pane_id: pane, text: captureAnsi(pane, lines) });
     }
     if (req.method === "GET" && path === "/prompt") {
       const pane = url.searchParams.get("pane_id");
@@ -1205,11 +1300,22 @@ Bun.serve<TermData>({
         ["new-session", "-d", "-s", termSession, "-t", d.session],
         ["set-option", "-t", termSession, "destroy-unattached", "off"],
         ["set-option", "-t", termSession, "status", "off"],
-        ["set-option", "-t", termSession, "mouse", "off"], // mouse button toggles it
+        // On by default: tmux only scrolls (enters copy-mode) on a wheel report, and the
+        // page turns swipes into those. The 🖱 button toggles it off for raw TUI mouse use.
+        ["set-option", "-t", termSession, "mouse", "on"],
         ["set-option", "-t", termSession, "window-size", "latest"],
       ];
       if (d.winIndex) setup.push(["select-window", "-t", `${termSession}:${d.winIndex}`]);
       tmuxChain(setup);
+      // A client renders a whole window, so a split shows the neighbour pane too. Zoom
+      // the target pane to isolate it. Zoom is a WINDOW property shared with the desktop
+      // client, so only touch it when the window is split and not already zoomed — and
+      // undo exactly that on close (see close()).
+      const info = tmux(["display-message", "-p", "-t", d.paneId, "#{window_zoomed_flag},#{window_panes}"]).out.trim();
+      const [zoomFlag, panes] = info.split(",");
+      if (zoomFlag === "0" && Number(panes) > 1) {
+        if (tmux(["resize-pane", "-Z", "-t", d.paneId]).ok) d.zoomed = true;
+      }
       const child = Bun.spawn([NODE_BIN, PTY_BRIDGE, termSession, String(d.cols), String(d.rows)], {
         stdin: "pipe",
         stdout: "pipe",
@@ -1250,6 +1356,12 @@ Bun.serve<TermData>({
         d.child?.kill();
       } catch {
         /* already gone */
+      }
+      // Undo our own zoom, but only if it's still zoomed — the desktop client may have
+      // unzoomed (or re-zoomed another pane) meanwhile, and that choice wins.
+      if (d.zoomed) {
+        const zoomFlag = tmux(["display-message", "-p", "-t", d.paneId, "#{window_zoomed_flag}"]).out.trim();
+        if (zoomFlag === "1") tmux(["resize-pane", "-Z", "-t", d.paneId]);
       }
       // After kill-session the shared window snaps back to the desktop client's
       // size as soon as that client views it (window-size latest).

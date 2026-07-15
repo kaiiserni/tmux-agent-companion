@@ -20,7 +20,10 @@ const term = pty.spawn(TMUX, ['-u', 'attach', '-t', target], {
   cols: clampCols(cols0),
   rows: clampRows(rows0),
   cwd: process.env.HOME,
-  env: process.env,
+  // Passing env explicitly overrides the TERM that `name` would set, and the bridge
+  // runs as a systemd service with no TERM of its own. Without it tmux can't tell the
+  // terminal does SGR mouse, so it never parses our wheel reports (= no scrolling).
+  env: { ...process.env, TERM: 'xterm-256color' },
 });
 
 term.onData((d) => process.stdout.write(d));
