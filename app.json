@@ -40,6 +40,12 @@
           "resizeMode": "contain",
           "backgroundColor": "#1a1b26"
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock the agent dashboard with Face ID."
+        }
       ]
     ],
     "extra": {

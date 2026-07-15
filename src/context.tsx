@@ -9,6 +9,7 @@ export interface Prefs {
   soundAlerts: boolean;
   showSystemStats: boolean;
   showClaudeUsage: boolean;
+  faceIdLock: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -19,6 +20,8 @@ const DEFAULT_PREFS: Prefs = {
   soundAlerts: true,
   showSystemStats: true,
   showClaudeUsage: true,
+  // Agent conversations mix work across different clients - lock by default.
+  faceIdLock: true,
 };
 
 interface AppContextValue {

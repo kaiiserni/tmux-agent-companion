@@ -3,15 +3,16 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { focusManager, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, Text, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getBaseUrl, setBaseUrl as persistBaseUrl } from './src/config';
-import { AppProvider } from './src/context';
+import { AppProvider, useApp } from './src/context';
 import { useOverviewFull } from './src/hooks';
 import { NotificationsController } from './src/NotificationsController';
 import type { RootStackParamList, TabParamList } from './src/navigation';
 import { queryClient } from './src/queryClient';
+import { LockScreen } from './src/screens/LockScreen';
 import { OverviewScreen } from './src/screens/OverviewScreen';
 import { PaneDetailScreen } from './src/screens/PaneDetailScreen';
 import { SearchScreen } from './src/screens/SearchScreen';
@@ -19,6 +20,8 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { SummaryScreen } from './src/screens/SummaryScreen';
 import { TilesScreen } from './src/screens/TilesScreen';
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
+import { useAppLock } from './src/useAppLock';
+import { useNavState } from './src/useNavState';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
@@ -58,9 +61,31 @@ function Tabs() {
   );
 }
 
+// Gates the authenticated app behind Face ID/Touch ID (when enabled and the
+// device has it enrolled) - separate from Root so it can read prefs via
+// useApp(), which only exists inside AppProvider's subtree.
+// The lock is an OVERLAY, not a replacement: swapping the tree out would unmount
+// NavigationContainer, so unlocking would dump you back on Summary instead of the
+// screen you left.
+function LockedApp({ children }: { children: ReactNode }) {
+  const { prefs } = useApp();
+  const { locked, authenticate } = useAppLock(prefs.faceIdLock);
+  return (
+    <View style={{ flex: 1 }}>
+      {children}
+      {locked ? (
+        <View style={StyleSheet.absoluteFill}>
+          <LockScreen onAuthenticate={authenticate} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Root() {
   const { colors, font } = useTheme();
   const [baseUrl, setUrl] = useState<string | null>(null);
+  const nav = useNavState();
 
   useEffect(() => {
     getBaseUrl().then(setUrl);
@@ -83,7 +108,7 @@ function Root() {
     },
   };
 
-  if (baseUrl === null) {
+  if (baseUrl === null || !nav.ready) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color={colors.accent} />
@@ -96,8 +121,13 @@ function Root() {
       {!baseUrl ? (
         <SettingsScreen initialUrl="" onSave={save} />
       ) : (
-        <>
-        <NavigationContainer ref={navigationRef} theme={navTheme}>
+        <LockedApp>
+        <NavigationContainer
+          ref={navigationRef}
+          theme={navTheme}
+          initialState={nav.initialState}
+          onStateChange={nav.onStateChange}
+        >
           <Stack.Navigator
             screenOptions={{
               headerStyle: { backgroundColor: colors.deepest },
@@ -118,7 +148,7 @@ function Root() {
               if (navigationRef.isReady()) navigationRef.navigate('PaneDetail', { paneId: id });
             }}
           />
-        </>
+        </LockedApp>
       )}
     </AppProvider>
   );

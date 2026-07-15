@@ -24,6 +24,7 @@ const PREF_LABELS: Record<keyof Prefs, string> = {
   soundAlerts: 'Sound alerts',
   showSystemStats: 'CPU / memory bar',
   showClaudeUsage: 'Agent usage bar',
+  faceIdLock: 'Require Face ID',
 };
 
 export function SettingsScreen({

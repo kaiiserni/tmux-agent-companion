@@ -11,6 +11,7 @@ const PREFS: Prefs = {
   soundAlerts: false,
   showSystemStats: false,
   showClaudeUsage: false,
+  faceIdLock: false,
 };
 
 function pane(overrides: Partial<Pane>): Pane {
