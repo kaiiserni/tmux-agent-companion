@@ -114,6 +114,10 @@ async function post(baseUrl: string, path: string, body: unknown): Promise<void>
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
 }
 
+// APNs device-token registration for self-hosted push (bucket 4).
+export const registerPushToken = (b: string, token: string, env: 'sandbox' | 'production') =>
+  post(b, '/push/register', { token, env });
+
 export async function getPanes(b: string): Promise<PanesResponse> {
   const r = await get<PanesResponse>(b, '/panes');
   for (const p of r.panes) p.needs_from_you = cleanBlocker(p.needs_from_you);
