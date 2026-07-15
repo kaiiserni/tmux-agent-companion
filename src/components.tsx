@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { ClaudeUsage, Pane, SystemStats, UsageLimit } from './api';
 import { redact, useApp } from './context';
 import { hapticTap } from './haptics';
@@ -171,6 +171,43 @@ function upFor(sec: number): string {
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// Backdrop is an absolutely-positioned Pressable *behind* the sheet, not a parent of it:
+// a Pressable ancestor claims the touch responder and the inner ScrollView never gets
+// the pan, so the content couldn't be scrolled at all. Height tracks the screen instead
+// of a fixed px cap, so a long list (5 Claude accounts + codex + grok) stays reachable.
+function ModalSheet({
+  visible,
+  onClose,
+  title,
+  children,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  const { colors, font } = useTheme();
+  const { height } = useWindowDimensions();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.usageBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[styles.usageSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.usageHead}>
+            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>{title}</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={{ maxHeight: height * 0.68 }} showsVerticalScrollIndicator>
+            {children}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function SystemModal({ visible, onClose, sys }: { visible: boolean; onClose: () => void; sys: SystemStats }) {
   const { colors, font } = useTheme();
   const col = (p: number) => (p >= 85 ? colors.attention : p >= 60 ? colors.waiting : colors.running);
@@ -191,60 +228,45 @@ function SystemModal({ visible, onClose, sys }: { visible: boolean; onClose: () 
     </View>
   );
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.usageBackdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.usageSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <View style={styles.usageHead}>
-            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>System</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
-            </Pressable>
-          </View>
-          <ScrollView style={{ maxHeight: 460 }}>
-            <View style={styles.usageAcct}>
-              <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
-                CPU · {sys.cores.length} cores · load {sys.load.map((l) => l.toFixed(1)).join(' ')}
+    <ModalSheet visible={visible} onClose={onClose} title="System">
+      <View style={styles.usageAcct}>
+        <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
+          CPU · {sys.cores.length} cores · load {sys.load.map((l) => l.toFixed(1)).join(' ')}
+        </Text>
+        {row('total', sys.cpu, `up ${upFor(sys.uptime)}`)}
+        {sys.cores.map((c, i) => row(`core ${i}`, c, ''))}
+      </View>
+
+      <View style={styles.usageAcct}>
+        <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Memory</Text>
+        {row('used', sys.mem.percent, `${gb(sys.mem.used)} / ${gb(sys.mem.total)}`)}
+        {sys.mem.cached > 0 ? (
+          <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 10, marginTop: 4 }}>
+            cached {gb(sys.mem.cached)} · available {gb(sys.mem.available)}
+          </Text>
+        ) : null}
+        {sys.swap ? row('swap', sys.swap.percent, `${gb(sys.swap.used)} / ${gb(sys.swap.total)}`) : null}
+      </View>
+
+      {sys.top.length > 0 ? (
+        <View style={styles.usageAcct}>
+          <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Top processes</Text>
+          {sys.top.map((p, i) => (
+            <View key={`${p.name}-${i}`} style={styles.usageLine}>
+              <Text style={{ color: colors.text, fontFamily: font.regular, fontSize: 11, flex: 1 }} numberOfLines={1}>
+                {p.name}
               </Text>
-              {row('total', sys.cpu, `up ${upFor(sys.uptime)}`)}
-              {sys.cores.map((c, i) => row(`core ${i}`, c, ''))}
+              <Text style={{ color: col(p.cpu), fontFamily: font.medium, fontSize: 11, width: 52, textAlign: 'right' }}>
+                {p.cpu.toFixed(1)}%
+              </Text>
+              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, width: 56, textAlign: 'right' }}>
+                {p.mem.toFixed(1)}% mem
+              </Text>
             </View>
-
-            <View style={styles.usageAcct}>
-              <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Memory</Text>
-              {row('used', sys.mem.percent, `${gb(sys.mem.used)} / ${gb(sys.mem.total)}`)}
-              {sys.mem.cached > 0 ? (
-                <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 10, marginTop: 4 }}>
-                  cached {gb(sys.mem.cached)} · available {gb(sys.mem.available)}
-                </Text>
-              ) : null}
-              {sys.swap ? row('swap', sys.swap.percent, `${gb(sys.swap.used)} / ${gb(sys.swap.total)}`) : null}
-            </View>
-
-            {sys.top.length > 0 ? (
-              <View style={styles.usageAcct}>
-                <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>Top processes</Text>
-                {sys.top.map((p, i) => (
-                  <View key={`${p.name}-${i}`} style={styles.usageLine}>
-                    <Text style={{ color: colors.text, fontFamily: font.regular, fontSize: 11, flex: 1 }} numberOfLines={1}>
-                      {p.name}
-                    </Text>
-                    <Text style={{ color: col(p.cpu), fontFamily: font.medium, fontSize: 11, width: 52, textAlign: 'right' }}>
-                      {p.cpu.toFixed(1)}%
-                    </Text>
-                    <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, width: 56, textAlign: 'right' }}>
-                      {p.mem.toFixed(1)}% mem
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+          ))}
+        </View>
+      ) : null}
+    </ModalSheet>
   );
 }
 
@@ -255,51 +277,36 @@ function UsageModal({ visible, onClose, usage }: { visible: boolean; onClose: ()
     return '█'.repeat(fill) + '░'.repeat(10 - fill);
   };
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.usageBackdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.usageSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <View style={styles.usageHead}>
-            <Text style={{ color: colors.text, fontFamily: font.bold, fontSize: 15 }}>Agent usage</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 16 }}>✕</Text>
-            </Pressable>
-          </View>
-          <ScrollView style={{ maxHeight: 420 }}>
-            {usage.accounts.map((a) => (
-              <View key={a.key} style={styles.usageAcct}>
-                <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
-                  {a.label} · {a.name}
-                  {a.plan ? ` · ${a.plan}` : ''}
+    <ModalSheet visible={visible} onClose={onClose} title="Agent usage">
+      {usage.accounts.map((a) => (
+        <View key={a.key} style={styles.usageAcct}>
+          <Text style={{ color: colors.accent, fontFamily: font.semibold, fontSize: 12 }}>
+            {a.label} · {a.name}
+            {a.plan ? ` · ${a.plan}` : ''}
+          </Text>
+          {a.limits.length === 0 ? (
+            <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12, marginTop: 4 }}>no data</Text>
+          ) : (
+            a.limits.map((l) => (
+              <View key={l.kind} style={styles.usageLine}>
+                <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11, width: 84 }} numberOfLines={1}>
+                  {limitLabel(l)}
                 </Text>
-                {a.limits.length === 0 ? (
-                  <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 12, marginTop: 4 }}>no data</Text>
-                ) : (
-                  a.limits.map((l) => (
-                    <View key={l.kind} style={styles.usageLine}>
-                      <Text style={{ color: colors.muted, fontFamily: font.regular, fontSize: 11, width: 84 }} numberOfLines={1}>
-                        {limitLabel(l)}
-                      </Text>
-                      <Text style={{ color: sevColor(l, colors), fontFamily: font.regular, fontSize: 11 }}>
-                        {l.percent == null ? '' : bar(l.percent)}
-                      </Text>
-                      <Text style={{ color: sevColor(l, colors), fontFamily: font.medium, fontSize: 11, width: 38, textAlign: 'right' }}>
-                        {pctText(l)}
-                      </Text>
-                      <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, flex: 1, textAlign: 'right' }} numberOfLines={1}>
-                        {resetsLabel(l)}
-                      </Text>
-                    </View>
-                  ))
-                )}
+                <Text style={{ color: sevColor(l, colors), fontFamily: font.regular, fontSize: 11 }}>
+                  {l.percent == null ? '' : bar(l.percent)}
+                </Text>
+                <Text style={{ color: sevColor(l, colors), fontFamily: font.medium, fontSize: 11, width: 38, textAlign: 'right' }}>
+                  {pctText(l)}
+                </Text>
+                <Text style={{ color: colors.dim, fontFamily: font.regular, fontSize: 10, flex: 1, textAlign: 'right' }} numberOfLines={1}>
+                  {resetsLabel(l)}
+                </Text>
               </View>
-            ))}
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+            ))
+          )}
+        </View>
+      ))}
+    </ModalSheet>
   );
 }
 

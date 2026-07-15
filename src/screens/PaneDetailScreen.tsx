@@ -2,7 +2,7 @@ import type { RouteProp } from '@react-navigation/native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { Pane, TranscriptEntry } from '../api';
 import { ageLabel, Badge } from '../components';
@@ -13,6 +13,8 @@ import { LIVE_POLL, useActivity, usePaneActions, usePanes, usePrompt, useScreen,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Markdown } from '../markdown';
 import { useKeyboardHeight } from '../useKeyboardHeight';
+import { parseAnsiLine, visibleLength } from '../ansi';
+import { FIT_CALIBRATION, useFitFontSize } from '../useFitFontSize';
 import type { RootStackParamList } from '../navigation';
 import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
@@ -146,6 +148,63 @@ function TerminalView({ paneId }: { paneId: string }) {
   );
 }
 
+// Static snapshot of the pane (tmux capture-pane -e), rendered with real ANSI
+// colors and auto-fit to the container width - like a compact read-only
+// terminal, unlike the raw grey text dump this used to be.
+function ScreenView({ text, priv }: { text: string; priv: boolean }) {
+  const { colors, font } = useTheme();
+  const { height: winHeight } = useWindowDimensions();
+  const lines = text.split('\n');
+  const maxLineLen = lines.reduce((max, l) => Math.max(max, visibleLength(l)), 0);
+  const { onLayout, onCalibrate, fontSize, overflows } = useFitFontSize(maxLineLen);
+
+  const body = (
+    <View>
+      <Text
+        style={{ position: 'absolute', opacity: 0, fontSize: 12, fontFamily: font.regular }}
+        onLayout={onCalibrate}
+      >
+        {FIT_CALIBRATION}
+      </Text>
+      {lines.map((line, i) => (
+        <Text key={i} style={{ fontFamily: font.regular, fontSize, lineHeight: fontSize * 1.35 }}>
+          {parseAnsiLine(line).map((seg, j) => (
+            <Text
+              key={j}
+              style={{
+                color: seg.color ?? colors.dim,
+                opacity: seg.dim ? 0.6 : 1,
+                fontFamily: seg.bold ? font.bold : font.regular,
+                textDecorationLine: seg.underline ? 'underline' : 'none',
+                fontStyle: seg.italic ? 'italic' : 'normal',
+              }}
+            >
+              {redact(seg.text, priv)}
+            </Text>
+          ))}
+        </Text>
+      ))}
+    </View>
+  );
+
+  // Own scroll area at a FIXED height, not part of the page's scroll: a live pane
+  // re-renders every LIVE_POLL, and when its content height feeds the page scroll the
+  // offset gets clamped back to the top every 1.5s - which reads as "can't scroll at all".
+  return (
+    <View style={[styles.screenWrap, { backgroundColor: colors.deepest, height: Math.round(winHeight * 0.55) }]} onLayout={onLayout}>
+      <ScrollView showsVerticalScrollIndicator contentContainerStyle={{ padding: 10 }}>
+        {overflows ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator>
+            {body}
+          </ScrollView>
+        ) : (
+          body
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
 export function PaneDetailScreen() {
   const { colors, font } = useTheme();
   const { prefs } = useApp();
@@ -208,6 +267,21 @@ export function PaneDetailScreen() {
     if (detailTab === 'conversation' && entryCount > lastCount.current) scrollToEnd();
     lastCount.current = entryCount;
   }, [entryCount, detailTab, scrollToEnd]);
+
+  const sendReply = useCallback(() => {
+    if (!reply.trim() || actions.send.isPending) return;
+    actions.send.mutate(
+      { id: paneId, text: reply },
+      {
+        onSuccess: () => {
+          hapticSuccess();
+          setReply('');
+          goFast();
+          scrollToEnd();
+        },
+      },
+    );
+  }, [reply, actions.send, paneId, goFast, scrollToEnd]);
 
   const confirmGoto = () =>
     Alert.alert('Jump to pane', 'This switches the focused pane in your tmux session.', [
@@ -364,11 +438,7 @@ export function PaneDetailScreen() {
         screen.isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 12 }} />
         ) : (
-          <ScrollView horizontal style={[styles.screenWrap, { backgroundColor: colors.deepest }]} showsHorizontalScrollIndicator>
-            <Text style={[styles.screen, { color: colors.dim, fontFamily: font.regular }]}>
-              {redact(screen.data?.text ?? '', priv)}
-            </Text>
-          </ScrollView>
+          <ScreenView text={screen.data?.text ?? ''} priv={priv} />
         )
       ) : null}
 
@@ -469,23 +539,15 @@ export function PaneDetailScreen() {
               placeholderTextColor={colors.muted}
               multiline
               editable={!actions.send.isPending}
+              // Hardware Return (external keyboard, e.g. iPad) sends instead of
+              // inserting a newline - matches how the on-screen Send button behaves.
+              submitBehavior="submit"
+              onSubmitEditing={sendReply}
               style={[styles.replyInput, { color: colors.text, backgroundColor: colors.surface, borderColor: colors.border, fontFamily: font.regular }]}
             />
             <Pressable
               disabled={!reply.trim() || actions.send.isPending}
-              onPress={() =>
-                actions.send.mutate(
-                  { id: paneId, text: reply },
-                  {
-                    onSuccess: () => {
-                      hapticSuccess();
-                      setReply('');
-                      goFast();
-                      scrollToEnd();
-                    },
-                  },
-                )
-              }
+              onPress={sendReply}
               style={({ pressed }) => [styles.sendBtn, { backgroundColor: colors.accent, opacity: !reply.trim() || actions.send.isPending ? 0.4 : pressed ? 0.7 : 1 }]}
             >
               <Text style={{ color: '#fff', fontFamily: font.semibold, fontSize: 13 }}>
@@ -552,7 +614,6 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   screenWrap: { borderRadius: 8 },
-  screen: { fontSize: 11, lineHeight: 15, padding: 10 },
   actLine: { fontSize: 11, lineHeight: 16 },
   toast: {
     position: 'absolute',

@@ -40,6 +40,7 @@ const ACCOUNT_NAMES: Record<string, string> = {
   c: 'canarycoders',
   p: 'canarypulse',
   y: 'kyan',
+  b: 'kaibot',
 };
 
 export function accountLabel(key: string): string {
