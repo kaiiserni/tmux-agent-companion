@@ -124,6 +124,13 @@ export function registerToken(token: string, env: PushEnv): void {
   t[token] = { env, updatedAt: Math.floor(Date.now() / 1000) };
   saveTokens(t);
 }
+function setTokenEnv(token: string, env: PushEnv): void {
+  const t = loadTokens();
+  if (t[token] && t[token].env !== env) {
+    t[token].env = env;
+    saveTokens(t);
+  }
+}
 export function dropToken(token: string): void {
   const t = loadTokens();
   if (t[token]) {
@@ -152,7 +159,17 @@ export async function sendAlert(a: AlertInput): Promise<{ sent: number; pruned: 
   let pruned = 0;
   const results: SendResult[] = [];
   for (const [token, rec] of Object.entries(tokens)) {
-    const r = await sendOne(rec.env, token, payload, a.collapseId);
+    let r = await sendOne(rec.env, token, payload, a.collapseId);
+    // The APNs environment is baked into the build's aps-environment entitlement,
+    // which doesn't always match the client's guess (EAS dev builds can ship the
+    // production entitlement → a production token). On a host mismatch, try the
+    // other host and remember it if it works — self-healing, no client round-trip.
+    if (r.status !== 200 && (r.reason === "BadDeviceToken" || r.reason === "DeviceTokenNotForTopic")) {
+      const other: PushEnv = rec.env === "sandbox" ? "production" : "sandbox";
+      const alt = await sendOne(other, token, payload, a.collapseId);
+      if (alt.status === 200) setTokenEnv(token, other);
+      if (alt.status) r = alt;
+    }
     results.push(r);
     if (r.status === 200) sent++;
     else if (r.status === 410 || (r.reason && DEAD_REASONS.has(r.reason))) {
