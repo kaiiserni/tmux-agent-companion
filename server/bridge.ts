@@ -4,6 +4,7 @@ import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
+import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
 import type { Overview, OverviewProject } from "./types";
 
 // Read/write bridge between the live tmux fleet and the companion app. Mirrors the
@@ -1233,6 +1234,26 @@ Bun.serve<TermData>({
     if (req.method === "GET" && path === "/system") return json(await systemStats());
     if (req.method === "GET" && path === "/claude-usage") return json(claudeUsage());
 
+    // Push (APNs) — device-token registration + status/test. These carry no pane_id,
+    // so they must resolve before the pane_id-gated POST block below.
+    if (req.method === "GET" && path === "/push/status") {
+      return json({ configured: pushConfigured(), tokens: tokenCount() });
+    }
+    if (req.method === "POST" && path === "/push/register") {
+      const body = (await req.json().catch(() => ({}))) as { token?: string; env?: string };
+      if (!body.token) return json({ ok: false, error: "token required" }, 400);
+      const env: PushEnv = body.env === "production" ? "production" : "sandbox";
+      registerToken(body.token, env);
+      audit("push-register", `${body.token.slice(0, 8)}…`, env);
+      return json({ ok: true, configured: pushConfigured(), tokens: tokenCount() });
+    }
+    if (req.method === "POST" && path === "/push/test") {
+      if (!pushConfigured()) return json({ ok: false, error: "apns key not configured" }, 503);
+      const r = await sendAlert({ title: "Agent bridge", body: "Push works ✓", collapseId: "test" });
+      audit("push-test", `sent=${r.sent}`, `pruned=${r.pruned}`);
+      return json({ ok: true, sent: r.sent, pruned: r.pruned });
+    }
+
     if (req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as {
         pane_id?: string;
@@ -1371,4 +1392,43 @@ Bun.serve<TermData>({
   },
 });
 
+// Server-side rising-edge push: iOS freezes the app's JS on background, so the app
+// can't poll for attention. The bridge watches the fleet and pushes once when a pane
+// enters "attention" (permission menu / flagged / error / waiting). Rate-limited per
+// pane; a pane leaving attention re-arms it. First tick primes the set without pushing
+// so a restart doesn't fire a notification storm for already-waiting panes.
+const attentionPanes = new Set<string>();
+const lastPushedAt = new Map<string, number>();
+const PUSH_MIN_INTERVAL = 10 * 60; // seconds between pushes for the same pane
+let attentionPrimed = false;
+
+function watchAttention(): void {
+  if (!pushConfigured() || tokenCount() === 0) return;
+  const panes = collectLive();
+  if (panes === null) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const current = new Set<string>();
+  for (const p of panes) {
+    if (coarseSection(p) !== "attention") continue;
+    current.add(p.paneId);
+    if (!attentionPrimed) continue; // priming run: record only, don't push
+    if (attentionPanes.has(p.paneId)) continue; // not a rising edge
+    const last = lastPushedAt.get(p.paneId) ?? 0;
+    if (nowSec - last < PUSH_MIN_INTERVAL) continue;
+    lastPushedAt.set(p.paneId, nowSec);
+    sendAlert({
+      title: "An agent needs you",
+      body: "Tap to open the dashboard",
+      paneId: p.paneId,
+      collapseId: p.paneId,
+    }).catch(() => {});
+  }
+  attentionPanes.clear();
+  for (const id of current) attentionPanes.add(id);
+  attentionPrimed = true;
+}
+
+setInterval(watchAttention, 20_000);
+
 console.log(`agent-bridge listening on 0.0.0.0:${BRIDGE_PORT} (auth ${TOKEN ? "on" : "OFF - set token"})`);
+console.log(`push: ${pushConfigured() ? "configured" : "OFF (no apns key)"}, ${tokenCount()} device token(s)`);
