@@ -46,6 +46,12 @@
         {
           "faceIDPermission": "Unlock the agent dashboard with Face ID."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": false
+        }
       ]
     ],
     "extra": {
