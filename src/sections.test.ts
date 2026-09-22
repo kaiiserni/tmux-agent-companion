@@ -12,6 +12,7 @@ const PREFS: Prefs = {
   showSystemStats: false,
   showClaudeUsage: false,
   faceIdLock: false,
+  autoSpeak: false,
 };
 
 function pane(overrides: Partial<Pane>): Pane {

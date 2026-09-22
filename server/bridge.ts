@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
 import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
+import { audioFile, synthesize, ttsConfigured } from "./tts";
 import type { Overview, OverviewProject } from "./types";
 
 // Read/write bridge between the live tmux fleet and the companion app. Mirrors the
@@ -1175,6 +1176,20 @@ Bun.serve<TermData>({
       });
     }
 
+    // Rendered speech. An audio player may drop the Authorization header on a
+    // redirect or range request, so this route also takes the token as a query
+    // param (same escape hatch as /terminal); the id itself is a content hash.
+    if (req.method === "GET" && path.startsWith("/tts/")) {
+      if (!authOk(req) && !tokenOk(url.searchParams.get("token") ?? "")) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const file = audioFile(path.slice(5).replace(/\.mp3$/, ""));
+      if (!file) return new Response("", { status: 404 });
+      return new Response(Bun.file(file), {
+        headers: { "Content-Type": "audio/mpeg", "Cache-Control": "max-age=86400" },
+      });
+    }
+
     // Everything else is token-gated: the read endpoints carry CONFIDENTIAL
     // cross-client agent data, so LAN reachability alone must not grant access.
     if (!authOk(req)) {
@@ -1254,6 +1269,20 @@ Bun.serve<TermData>({
       return json({ ok: true, sent: r.sent, pruned: r.pruned });
     }
 
+    // Reply-out-loud: synthesise on demand (cached by content hash), then serve
+    // the mp3 as its own URL so the app just hands it to the audio player.
+    if (req.method === "POST" && path === "/tts") {
+      if (!ttsConfigured()) return json({ ok: false, error: "canaryllm key not configured" }, 503);
+      const body = (await req.json().catch(() => ({}))) as { text?: string; pane_id?: string };
+      if (!body.text?.trim()) return json({ ok: false, error: "text required" }, 400);
+      try {
+        const r = await synthesize(body.text);
+        if (!r.cached) audit("tts", body.pane_id ?? "-", `${r.chars} chars`);
+        return json({ ok: true, id: r.id, url: `/tts/${r.id}.mp3`, chars: r.chars, cached: r.cached });
+      } catch (e) {
+        return json({ ok: false, error: (e as Error).message ?? String(e) }, 502);
+      }
+    }
     if (req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as {
         pane_id?: string;

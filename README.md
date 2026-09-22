@@ -9,6 +9,7 @@ attention/running/idle classification, tiles, and per-project overview. It adds 
 per-pane detail screen the TUI doesn't have — the transcript as a chat, the live
 screen, and the activity log split into tabs. From there you reply in free text or
 by voice, answer a permission prompt, or send raw keys (insert, paste, interrupt).
+Replies can be read aloud, per message or automatically for a whole conversation.
 When an agent newly needs you, the app fires a local notification, a haptic tap, and
 a short sound you can switch off.
 
@@ -72,10 +73,29 @@ bun start          # Expo dev server; open in Expo Go
 In the app's **Settings**, set the bridge URL (e.g. `http://192.168.1.10:8790`)
 and paste the token from `~/.config/agent-bridge/token`.
 
+### 3. Read replies aloud (optional)
+
+Speech goes through [CanaryLLM](https://canaryllm.canarycoders.es) (ElevenLabs).
+Drop its API key next to the bridge token and restart the bridge:
+
+```sh
+printf '%s' "$CANARYLLM_API_KEY" > ~/.config/agent-bridge/canaryllm
+chmod 600 ~/.config/agent-bridge/canaryllm
+```
+
+Renders are cached by content hash under `~/.local/state/agent-bridge/tts/`, so
+replaying a reply costs nothing. `TTS_VOICE_ID` picks another voice.
+
+In a conversation, `▷` under a reply speaks it and `♪` in the header keeps
+speaking every reply that lands from then on. Without the key, tapping `▷`
+reports it. Privacy mode hides both - redacted text is unspeakable.
+
 ## Security model
 
 - Every route except `/health` requires the bearer token - the read endpoints
-  carry agent data, so LAN reachability alone must not grant access.
+  carry agent data, so LAN reachability alone must not grant access. Rendered
+  speech also accepts the token as a query param, because audio players drop
+  custom headers on range requests.
 - The reply/answer endpoints inject keystrokes into live agents, so they are
   gated to `claude` panes, re-verify a choice menu before sending, and every
   mutation is written to an append-only audit log

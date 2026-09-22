@@ -1,7 +1,7 @@
 import type { RouteProp } from '@react-navigation/native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { Pane, TranscriptEntry } from '../api';
@@ -16,6 +16,7 @@ import { useKeyboardHeight } from '../useKeyboardHeight';
 import { parseAnsiLine, visibleLength } from '../ansi';
 import { FIT_CALIBRATION, useFitFontSize } from '../useFitFontSize';
 import type { RootStackParamList } from '../navigation';
+import { speak, stopSpeech, useSpeech } from '../tts';
 import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
 
@@ -53,6 +54,11 @@ function ToolBlock({ entry, priv, time, onCopy }: { entry: TranscriptEntry; priv
   );
 }
 
+// Identifies a turn across polls (the transcript is a sliding window, so the index isn't stable).
+function turnKey(entry: TranscriptEntry): string {
+  return `${entry.ts ?? ''}|${(entry.text ?? '').slice(0, 48)}`;
+}
+
 function fmtTime(ts?: string): string {
   if (!ts) return '';
   const d = new Date(ts);
@@ -60,13 +66,25 @@ function fmtTime(ts?: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function Turn({ entry, priv, onCopy }: { entry: TranscriptEntry; priv: boolean; onCopy: (t: string) => void }) {
+function Turn({
+  entry,
+  priv,
+  onCopy,
+  onSpeak,
+}: {
+  entry: TranscriptEntry;
+  priv: boolean;
+  onCopy: (t: string) => void;
+  onSpeak: (key: string, text: string) => void;
+}) {
   const { colors, font } = useTheme();
   const [expanded, setExpanded] = useState(false);
+  const speech = useSpeech();
   const time = fmtTime(entry.ts);
   if (entry.role === 'tool_use') return <ToolBlock entry={entry} priv={priv} time={time} onCopy={onCopy} />;
   const isUser = entry.role === 'user';
   const text = redact(entry.text ?? '', priv).replace(/\n{3,}/g, '\n\n').trim();
+  const speaking = speech.key === turnKey(entry);
   const long = text.length > 260 || text.split('\n').length > 7;
   return (
     <View style={{ alignSelf: isUser ? 'flex-end' : 'flex-start', maxWidth: '86%', marginBottom: 10 }}>
@@ -90,11 +108,20 @@ function Turn({ entry, priv, onCopy }: { entry: TranscriptEntry; priv: boolean; 
           </Pressable>
         ) : null}
       </Pressable>
-      {time ? (
-        <Text style={[styles.time, { color: colors.muted, fontFamily: font.regular, alignSelf: isUser ? 'flex-end' : 'flex-start' }]}>
-          {time}
-        </Text>
-      ) : null}
+      <View style={[styles.turnFoot, { alignSelf: isUser ? 'flex-end' : 'flex-start' }]}>
+        {!isUser && text && !priv ? (
+          <Pressable onPress={() => onSpeak(turnKey(entry), text)} hitSlop={10}>
+            {speaking && speech.loading ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Text style={{ color: speaking ? colors.accent : colors.dim, fontFamily: font.regular, fontSize: 13 }}>
+                {speaking ? '■' : '▷'}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
+        {time ? <Text style={[styles.time, { color: colors.muted, fontFamily: font.regular }]}>{time}</Text> : null}
+      </View>
     </View>
   );
 }
@@ -207,7 +234,7 @@ function ScreenView({ text, priv }: { text: string; priv: boolean }) {
 
 export function PaneDetailScreen() {
   const { colors, font } = useTheme();
-  const { prefs } = useApp();
+  const { prefs, baseUrl, autoSpeakOn, toggleAutoSpeak } = useApp();
   const priv = prefs.privacyMode;
   const route = useRoute<RouteProp<RootStackParamList, 'PaneDetail'>>();
   const { paneId } = route.params;
@@ -229,6 +256,15 @@ export function PaneDetailScreen() {
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   }, []);
+
+  const onSpeak = useCallback(
+    (key: string, text: string) => {
+      hapticTap();
+      speak(baseUrl, key, text, paneId).catch((e: Error) => Alert.alert('Read aloud failed', e.message));
+    },
+    [baseUrl, paneId],
+  );
+  useEffect(() => stopSpeech, []);
 
   const panes = usePanes();
   const pane: Pane | undefined = panes.data?.panes.find((p) => p.pane_id === paneId);
@@ -267,6 +303,37 @@ export function PaneDetailScreen() {
     if (detailTab === 'conversation' && entryCount > lastCount.current) scrollToEnd();
     lastCount.current = entryCount;
   }, [entryCount, detailTab, scrollToEnd]);
+
+  // Read replies aloud while the conversation's toggle is on. Arms on whatever is
+  // already on screen, so only replies that land from now on get spoken.
+  const autoSpeak = autoSpeakOn(paneId);
+  const entries = transcript.data?.entries;
+  const lastReply = useMemo(() => {
+    const list = entries ?? [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i];
+      if (e.role === 'assistant' && (e.text ?? '').trim()) return e;
+    }
+    return null;
+  }, [entries]);
+  const spokenKey = useRef<string | null>(null);
+  useEffect(() => {
+    // Redacted text is unspeakable, so privacy mode keeps quiet.
+    if (!autoSpeak || priv) {
+      spokenKey.current = null;
+      return;
+    }
+    if (!lastReply) return;
+    const key = turnKey(lastReply);
+    if (spokenKey.current === null || spokenKey.current === key) {
+      spokenKey.current = key;
+      return;
+    }
+    spokenKey.current = key;
+    speak(baseUrl, key, lastReply.text ?? '', paneId).catch(() => {
+      /* offline or TTS down - the ▷ button reports it */
+    });
+  }, [autoSpeak, lastReply, baseUrl, paneId, priv]);
 
   const sendReply = useCallback(() => {
     if (!reply.trim() || actions.send.isPending) return;
@@ -362,6 +429,16 @@ export function PaneDetailScreen() {
             {pane?.project || paneId}
           </Text>
           {pane?.permission_mode ? <Badge text={pane.permission_mode} color={colors.magenta} /> : null}
+          <Pressable
+            onPress={() => {
+              hapticSelect();
+              if (autoSpeak) stopSpeech();
+              toggleAutoSpeak(paneId);
+            }}
+            hitSlop={10}
+          >
+            <Text style={{ color: autoSpeak ? colors.accent : colors.dim, fontFamily: font.regular, fontSize: 16 }}>♪</Text>
+          </Pressable>
         </View>
         <Text style={[styles.meta, { color: colors.muted, fontFamily: font.regular }]}>
           {pane ? `${pane.target} · ${paneProviderMeta(pane)} · ${pane.status}` : paneId}
@@ -425,7 +502,7 @@ export function PaneDetailScreen() {
               </Pressable>
             ) : null}
             {shown.map((e, i) => (
-              <Turn key={offset + i} entry={e} priv={priv} onCopy={copy} />
+              <Turn key={offset + i} entry={e} priv={priv} onCopy={copy} onSpeak={onSpeak} />
             ))}
           </>
         );
@@ -601,7 +678,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  time: { fontSize: 10, marginTop: 3, marginHorizontal: 4 },
+  time: { fontSize: 10, marginHorizontal: 4 },
+  turnFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, minHeight: 16 },
   loadMore: { alignItems: 'center', paddingVertical: 8, marginBottom: 6 },
   toolChip: {
     alignSelf: 'flex-start',
