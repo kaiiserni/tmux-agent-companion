@@ -1,5 +1,17 @@
 import { getToken } from './config';
 
+export interface SplitPrompt {
+  kind: 'yesno' | 'menu' | 'select' | 'input' | 'enter' | 'password';
+  question: string;
+  options: { num: number; label: string; description?: string }[];
+  // select only: 0-based highlighted option
+  selected: number | null;
+  pane_id: string;
+  target: string;
+  command: string;
+  tail: string;
+}
+
 export interface Pane {
   pane_id: string;
   target: string;
@@ -13,6 +25,8 @@ export interface Pane {
   status: string;
   attention: boolean;
   wait_reason: string | null;
+  // prompt waiting in a non-agent pane of the same tmux window
+  split_prompt: SplitPrompt | null;
   unseen: boolean;
   marked_unread: boolean;
   permission_mode: string | null;
@@ -189,12 +203,16 @@ export interface PromptState {
   waiting: boolean;
   options: { num: number; label: string; description?: string }[];
   screen: string;
+  siblings?: SplitPrompt[];
 }
 
 export const getPrompt = (b: string, paneId: string) =>
   get<PromptState>(b, `/prompt?pane_id=${encodeURIComponent(paneId)}`);
 export const postSend = (b: string, paneId: string, text: string) => post(b, '/send', { pane_id: paneId, text });
 export const postAnswer = (b: string, paneId: string, key: string) => post(b, '/answer', { pane_id: paneId, key });
+export type SplitReply = { key: string } | { text: string };
+export const postSplitAnswer = (b: string, paneId: string, target: string, reply: SplitReply) =>
+  post(b, '/split-answer', { pane_id: paneId, target, ...reply });
 
 export const postSeen = (b: string, paneId: string) => post(b, '/seen', { pane_id: paneId });
 export const postMarkUnread = (b: string, paneId: string, on: boolean) =>

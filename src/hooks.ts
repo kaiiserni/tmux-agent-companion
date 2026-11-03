@@ -16,6 +16,8 @@ import {
   postMarkUnread,
   postSeen,
   postSend,
+  postSplitAnswer,
+  type SplitReply,
 } from './api';
 import { useApp } from './context';
 
@@ -158,5 +160,9 @@ export function usePaneActions() {
     mutationFn: (v: { id: string; key: string }) => postAnswer(baseUrl, v.id, v.key),
     onSuccess: (_r, v) => invalidatePane(v.id),
   });
-  return { seen, clear, goto, markUnread, send, answer };
+  const splitAnswer = useMutation({
+    mutationFn: (v: { id: string; target: string; reply: SplitReply }) => postSplitAnswer(baseUrl, v.id, v.target, v.reply),
+    onSuccess: (_r, v) => invalidatePane(v.id),
+  });
+  return { seen, clear, goto, markUnread, send, answer, splitAnswer };
 }

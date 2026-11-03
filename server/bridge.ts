@@ -4,6 +4,7 @@ import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
+import { detectPrompt, IDLE_SHELLS, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
 import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
 import { audioFile, synthesize, ttsConfigured } from "./tts";
 import type { Overview, OverviewProject } from "./types";
@@ -122,6 +123,8 @@ interface LivePane {
   prompt: string;
   summary: string;
   activityAt: number;
+  // first interactive prompt waiting in a non-agent pane of the same window
+  split: SplitDetail | null;
 }
 
 function parseLivePaneLine(line: string): LivePane | null {
@@ -159,6 +162,7 @@ function parseLivePaneLine(line: string): LivePane | null {
     prompt: paneOption(paneId, "@pane_prompt"),
     summary: paneOption(paneId, "@pane_summary"),
     activityAt: activityMtime(paneId),
+    split: null,
   };
 }
 
@@ -209,6 +213,7 @@ function isUnseen(p: LivePane): boolean {
 function coarseSection(p: LivePane): "attention" | "running" | "idle" {
   if (
     PERMISSION_REASONS.has(p.waitReason) ||
+    p.split ||
     p.attention ||
     p.status === "error" ||
     isWaiting(p.status) ||
@@ -222,7 +227,7 @@ function coarseSection(p: LivePane): "attention" | "running" | "idle" {
 // Lower = more urgent (pending.rs order). null = not pending.
 function priorityRank(p: LivePane): number | null {
   if (PERMISSION_REASONS.has(p.waitReason)) return 0;
-  if (p.attention) return 1;
+  if (p.attention || p.split) return 1;
   if (p.status === "error") return 2;
   if (isWaiting(p.status)) return 3;
   if (!isRunning(p.status) && isUnseen(p)) return 4; // Responded
@@ -347,8 +352,9 @@ function paneToJson(p: LivePane, nowSec: number, proj?: OverviewProject) {
     model: paneModel(p.sessionId),
     account: paneAccount(p.panePid),
     status: p.status,
-    attention: p.attention,
-    wait_reason: p.waitReason || null,
+    attention: p.attention || !!p.split,
+    wait_reason: p.waitReason || (p.split ? SPLIT_LABEL[p.split.kind] : null),
+    split_prompt: p.split,
     unseen: isUnseen(p),
     marked_unread: p.markedUnreadAt > 0,
     permission_mode: p.permissionMode || null,
@@ -379,6 +385,7 @@ function buildPanes() {
   if (panes === null) {
     return { updated_at: nowSec, tmux: false, counts: {}, panes: [] };
   }
+  attachSplits(panes);
   // Port of pending.rs sweep_stale_marks: no running TUI would otherwise clear a
   // pin once the pane stops being purely idle+seen, so it'd stick forever.
   for (const p of panes) {
@@ -819,6 +826,124 @@ function sendKey(paneId: string, key: string) {
   }
 }
 
+// --- split panes ---------------------------------------------------------------
+// The shell/CLI next to an agent often waits on a sudo/y-n/wizard prompt the agent
+// started. Agent panes are skipped (they have their own /prompt flow).
+
+export interface SplitDetail extends SplitPrompt {
+  pane_id: string;
+  target: string;
+  command: string;
+  tail: string;
+}
+
+const SPLIT_FORMAT = ["#{pane_id}", "#{window_id}", "#{@pane_agent}", "#{pane_current_command}", "#{cursor_y}",
+  "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}"].join(SEP);
+
+function parentPids(): Set<string> {
+  const proc = Bun.spawnSync(["ps", "-A", "-o", "ppid="]);
+  return new Set(proc.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean));
+}
+
+function readSplit(paneId: string, command: string, cursorY: number, target: string): SplitDetail | null {
+  const { ok, out } = tmux(["capture-pane", "-p", "-t", paneId]); // visible screen only
+  if (!ok) return null;
+  const prompt = detectPrompt(out, cursorY);
+  if (!prompt) return null;
+  const tail = out.split("\n").filter((l) => l.trim()).slice(-8).map((l) => l.slice(0, 200)).join("\n");
+  return { ...prompt, pane_id: paneId, target, command, tail };
+}
+
+// windowId → waiting splits. One list-panes call; only non-shell candidates get captured.
+function scanSplits(windowId?: string): Map<string, SplitDetail[]> {
+  const args = windowId
+    ? ["list-panes", "-t", windowId, "-F", SPLIT_FORMAT]
+    : ["list-panes", "-a", "-f", "#{==:#{m:term_*,#{session_name}},0}", "-F", SPLIT_FORMAT];
+  const { ok, out } = tmux(args);
+  const result = new Map<string, SplitDetail[]>();
+  if (!ok) return result;
+  const rows = out.trimEnd().split("\n").map((l) => l.split(SEP)).filter((r) => r.length >= 7);
+  const agentWindows = new Set(rows.filter((r) => r[2]).map((r) => r[1]!));
+  let parents: Set<string> | null = null;
+  for (const [id, win, agent, cmd, cy, target, pid] of rows) {
+    if (agent || !agentWindows.has(win!) || NO_PROMPT_COMMANDS.has(cmd!)) continue;
+    if (IDLE_SHELLS.has(cmd!) && !(parents ??= parentPids()).has(pid!)) continue;
+    const s = readSplit(id!, cmd!, Number(cy) || 0, target!);
+    if (s) result.set(win!, [...(result.get(win!) ?? []), s]);
+  }
+  return result;
+}
+
+function attachSplits(panes: LivePane[]) {
+  const splits = scanSplits();
+  for (const p of panes) p.split = splits.get(p.windowId)?.[0] ?? null;
+}
+
+const SPLIT_KEYS: Record<string, string> = { enter: "Enter", esc: "Escape", up: "Up", down: "Down", "ctrl-c": "C-c" };
+
+// Single-key prompts (prompts' confirm, read -n1) submit on the letter; others need
+// Enter. Send the letter, then Enter only if the same prompt is still up.
+async function pressThenConfirm(s: SplitDetail, literal: string) {
+  tmux(["send-keys", "-t", s.pane_id, "-l", literal]);
+  await Bun.sleep(200);
+  const cy = Number(tmux(["display-message", "-p", "-t", s.pane_id, "#{cursor_y}"]).out.trim()) || 0;
+  const again = readSplit(s.pane_id, s.command, cy, s.target);
+  if (again && again.kind === s.kind && again.question === s.question) tmux(["send-keys", "-t", s.pane_id, "Enter"]);
+}
+
+async function answerSplit(
+  agent: LivePane,
+  target: string,
+  key: string | undefined,
+  text: string | undefined,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  // Only a pane in the agent's own window that shows a prompt right now - never an
+  // arbitrary shell.
+  const s = (scanSplits(agent.windowId).get(agent.windowId) ?? []).find((x) => x.pane_id === target);
+  if (!s) return { status: 409, body: { ok: false, error: "no prompt on screen" } };
+  const done = (extra: string) => {
+    audit("split-answer", s.pane_id, `via=${agent.paneId} ${extra}`);
+    return { status: 200, body: { ok: true } };
+  };
+  if (key === "ctrl-c") {
+    tmux(["send-keys", "-t", s.pane_id, "C-c"]);
+    return done("key=ctrl-c");
+  }
+  if (s.kind === "password") return { status: 400, body: { ok: false, error: "answer passwords in the terminal" } };
+  if (text !== undefined) {
+    if (s.kind !== "input") return { status: 400, body: { ok: false, error: "not a text prompt" } };
+    sendText(s.pane_id, text);
+    return done(`${text.length} chars`);
+  }
+  const k = key ?? "";
+  if ((k === "y" || k === "n") && s.kind === "yesno") {
+    await pressThenConfirm(s, k);
+    return done(`key=${k}`);
+  }
+  if (/^[0-9]$/.test(k) && s.kind === "menu") {
+    if (!s.options.some((o) => o.num === Number(k)))
+      return { status: 409, body: { ok: false, error: "option not on screen", options: s.options } };
+    await pressThenConfirm(s, k);
+    return done(`key=${k}`);
+  }
+  const sel = k.match(/^select:(\d+)$/);
+  if (sel && s.kind === "select") {
+    const idx = Number(sel[1]);
+    if (idx >= s.options.length) return { status: 409, body: { ok: false, error: "option not on screen", options: s.options } };
+    const delta = idx - (s.selected ?? 0);
+    const cmds: string[][] = [];
+    for (let i = 0; i < Math.abs(delta); i++) cmds.push(["send-keys", "-t", s.pane_id, delta > 0 ? "Down" : "Up"]);
+    cmds.push(["send-keys", "-t", s.pane_id, "Enter"]);
+    tmuxChain(cmds);
+    return done(`select=${idx}`);
+  }
+  if (SPLIT_KEYS[k]) {
+    tmux(["send-keys", "-t", s.pane_id, SPLIT_KEYS[k]!]);
+    return done(`key=${k}`);
+  }
+  return { status: 400, body: { ok: false, error: "bad key for this prompt" } };
+}
+
 // --- actions -----------------------------------------------------------------
 
 const paneExists = collectOne;
@@ -1243,6 +1368,7 @@ Bun.serve<TermData>({
         waiting: isWaiting(live.status) || PERMISSION_REASONS.has(live.waitReason),
         options,
         screen,
+        siblings: scanSplits(live.windowId).get(live.windowId) ?? [],
       });
     }
 
@@ -1289,6 +1415,7 @@ Bun.serve<TermData>({
         on?: boolean;
         text?: string;
         key?: string;
+        target?: string;
       };
       if (!body.pane_id) return json({ error: "pane_id required" }, 400);
       const live = paneExists(body.pane_id);
@@ -1317,6 +1444,10 @@ Bun.serve<TermData>({
           sendText(live.paneId, body.text);
           audit("send", live.paneId, `${body.text.length} chars`);
           return json({ ok: true, echo: capture(live.paneId, 12) });
+        }
+        case "/split-answer": {
+          const r = await answerSplit(live, body.target ?? "", body.key, body.text);
+          return json(r.body, r.status);
         }
         case "/answer": {
           if (live.agent !== "claude") return json({ ok: false, error: "not a claude pane" }, 400);
@@ -1435,6 +1566,7 @@ function watchAttention(): void {
   if (!pushConfigured() || tokenCount() === 0) return;
   const panes = collectLive();
   if (panes === null) return;
+  attachSplits(panes);
   const nowSec = Math.floor(Date.now() / 1000);
   const current = new Set<string>();
   for (const p of panes) {
@@ -1446,7 +1578,7 @@ function watchAttention(): void {
     if (nowSec - last < PUSH_MIN_INTERVAL) continue;
     lastPushedAt.set(p.paneId, nowSec);
     sendAlert({
-      title: "An agent needs you",
+      title: p.split ? "A split pane is waiting for you" : "An agent needs you",
       body: "Tap to open the dashboard",
       paneId: p.paneId,
       collapseId: p.paneId,

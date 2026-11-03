@@ -34,7 +34,7 @@ Every route except `GET /health` requires `Authorization: Bearer <token>`.
 | GET | `/activity?pane_id=` | one pane's tool-call log |
 | GET | `/transcript?pane_id=&limit=` | Claude Code conversation (parsed JSONL) |
 | GET | `/screen?pane_id=&lines=` | `capture-pane` frame |
-| GET | `/prompt?pane_id=` | pending choice menu (options + descriptions) |
+| GET | `/prompt?pane_id=` | pending choice menu (options + descriptions), plus `siblings`: prompts waiting in non-agent panes of the same window |
 | GET | `/system` | CPU% / memory / load average |
 | GET | `/claude-usage` | Claude subscription usage (5h + weekly), read from the poller cache |
 | GET | `/term` | open; xterm.js terminal web UI (loaded by the app's WebView) |
@@ -45,6 +45,7 @@ Every route except `GET /health` requires `Authorization: Bearer <token>`.
 | POST | `/goto` `{pane_id}` | switch tmux client to the pane |
 | POST | `/send` `{pane_id,text}` | free-text reply (claude panes only) |
 | POST | `/answer` `{pane_id,key}` | select a menu option / send a key |
+| POST | `/split-answer` `{pane_id,target,key\|text}` | answer a prompt in a split next to the agent (`y`/`n`, digit, `select:N`, `enter`, `esc`, `ctrl-c`, or `text` for inputs). Only for a pane in the agent's window that shows a prompt right now; passwords are refused |
 
 Mutations (incl. terminal open/close) are written to an append-only audit log at
 `~/.local/state/agent-bridge/audit.log`.

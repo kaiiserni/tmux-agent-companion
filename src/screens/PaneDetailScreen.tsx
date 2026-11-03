@@ -19,6 +19,7 @@ import type { RootStackParamList } from '../navigation';
 import { speak, stopSpeech, useSpeech } from '../tts';
 import { agentGlyph, paneProviderMeta, statusColor, statusGlyph } from '../theme/glyphs';
 import { useTheme } from '../theme/ThemeProvider';
+import { SplitPromptCard } from '../SplitPromptCard';
 
 function toolSummary(e: TranscriptEntry): string {
   const input = (e.input ?? {}) as Record<string, unknown>;
@@ -283,10 +284,12 @@ export function PaneDetailScreen() {
   const kbHeight = useKeyboardHeight();
   const insets = useSafeAreaInsets();
   const isClaude = pane?.agent === 'claude';
-  const prompt = usePrompt(paneId, !!isClaude, fast ? 2000 : 5000);
+  // Any agent: the split next to a codex/grok pane can wait on a prompt too.
+  const prompt = usePrompt(paneId, !!pane, fast ? 2000 : 5000);
   const [reply, setReply] = useState('');
   const [visible, setVisible] = useState(10);
-  const options = prompt.data?.waiting ? prompt.data.options : [];
+  const options = isClaude && prompt.data?.waiting ? prompt.data.options : [];
+  const splits = prompt.data?.siblings ?? (pane?.split_prompt ? [pane.split_prompt] : []);
   // Many options collapse to one row so the conversation stays visible.
   useEffect(() => {
     setDecisionOpen(options.length <= 2);
@@ -536,6 +539,13 @@ export function PaneDetailScreen() {
       </View>
       </ScrollView>
       )}
+      {splits.length > 0 && detailTab !== 'terminal' ? (
+        <View style={{ paddingTop: 6, paddingBottom: isClaude && detailTab !== 'activity' ? 0 : insets.bottom }}>
+          {splits.map((s) => (
+            <SplitPromptCard key={s.pane_id} paneId={paneId} split={s} onAnswered={goFast} />
+          ))}
+        </View>
+      ) : null}
       {isClaude && detailTab !== 'activity' && detailTab !== 'terminal' ? (
         <View>
           {actions.send.isError ? (

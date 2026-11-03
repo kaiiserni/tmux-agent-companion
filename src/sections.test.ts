@@ -27,6 +27,7 @@ function pane(overrides: Partial<Pane>): Pane {
     status: 'idle',
     attention: false,
     wait_reason: null,
+    split_prompt: null,
     unseen: true,
     marked_unread: false,
     permission_mode: null,
