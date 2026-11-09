@@ -124,24 +124,39 @@ function detectSelect(region: string[]): SplitPrompt | null {
 // Powerline/nerd-font glyphs (private use area) may close the prompt segment.
 const PROMPT_END = /(?:^|\s)[$❯%#]\s(?:[\uE000-\uF8FF]\s?)*/;
 
-// row = line holding the prompt, so callers can show only the output above it.
-export function detectPendingCommand(
+// Shell input line around the cursor. command = text between prompt and cursor
+// (wrapped rows joined), right = rest of the cursor row (autosuggestion or real
+// buffer text, indistinguishable here), row = line holding the prompt.
+// null = no prompt found near the cursor.
+export function readCommandLine(
   lines: string[],
   cursorIdx: number,
   cursorX: number,
-): (SplitPrompt & { row: number }) | null {
-  const parts = [leftOfColumn(lines[cursorIdx] ?? "", cursorX)];
+): { command: string; right: string; row: number } | null {
+  const line = lines[cursorIdx] ?? "";
+  const left = leftOfColumn(line, cursorX);
+  const right = line.slice(left.length).trimEnd();
+  const parts = [left];
   // A long command wraps; walk up to the line that holds the prompt.
   for (let i = cursorIdx; i >= 0 && i > cursorIdx - 4; i--) {
     const m = PROMPT_END.exec(parts[0]!);
     if (m) {
       parts[0] = parts[0]!.slice(m.index + m[0].length);
-      const command = parts.join("").trim();
-      return command ? { kind: "command", question: command, options: [], selected: null, row: i } : null;
+      return { command: parts.join("").trim(), right, row: i };
     }
     if (i > 0) parts.unshift(lines[i - 1] ?? "");
   }
   return null;
+}
+
+export function detectPendingCommand(
+  lines: string[],
+  cursorIdx: number,
+  cursorX: number,
+): (SplitPrompt & { row: number }) | null {
+  const cl = readCommandLine(lines, cursorIdx, cursorX);
+  if (!cl?.command) return null;
+  return { kind: "command", question: cl.command, options: [], selected: null, row: cl.row };
 }
 
 function leftOfColumn(line: string, col: number): string {

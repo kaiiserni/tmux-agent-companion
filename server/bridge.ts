@@ -4,7 +4,7 @@ import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
-import { detectPendingCommand, detectPrompt, IDLE_SHELLS, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
+import { detectPendingCommand, detectPrompt, IDLE_SHELLS, readCommandLine, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
 import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
 import { audioFile, synthesize, ttsConfigured } from "./tts";
 import type { Overview, OverviewProject } from "./types";
@@ -839,7 +839,6 @@ export interface SplitDetail extends SplitPrompt {
 
 const SPLIT_FORMAT = ["#{pane_id}", "#{window_id}", "#{@pane_agent}", "#{pane_current_command}", "#{cursor_y}",
   "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}", "#{cursor_x}"].join(SEP);
-const CAPTURE_SEP = "<<split-capture-end>>";
 
 function parentPids(): Set<string> {
   const proc = Bun.spawnSync(["ps", "-A", "-o", "ppid="]);
@@ -869,14 +868,17 @@ interface IdleShell {
 function readStagedCommands(shells: IdleShell[]): { window: string; detail: SplitDetail }[] {
   if (!shells.length) return [];
   const starts = shells.map((s) => Math.max(0, s.cursorY - 10));
+  // Fresh nonce per scan: pane output can't fake a boundary and shift captures between panes.
+  const sep = `<<split-${crypto.randomUUID()}>>`;
   const cmds: string[][] = [];
   shells.forEach((s, i) => {
     // -N keeps trailing spaces, which a wrapped command can end a row with
     cmds.push(["capture-pane", "-p", "-N", "-t", s.paneId, "-S", String(starts[i]), "-E", String(s.cursorY)]);
-    cmds.push(["display-message", "-p", CAPTURE_SEP]);
+    cmds.push(["display-message", "-p", sep]);
   });
   const { out } = tmuxChain(cmds);
-  const chunks = out.split(`${CAPTURE_SEP}\n`);
+  const chunks = out.split(`${sep}\n`);
+  if (chunks.length !== shells.length + 1) return [];
   const found: { window: string; detail: SplitDetail }[] = [];
   shells.forEach((s, i) => {
     const lines = (chunks[i] ?? "").replace(/\n$/, "").split("\n");
@@ -932,6 +934,43 @@ async function pressThenConfirm(s: SplitDetail, literal: string) {
   if (again && again.kind === s.kind && again.question === s.question) tmux(["send-keys", "-t", s.pane_id, "Enter"]);
 }
 
+function shellLine(paneId: string) {
+  const [cy = 0, cx = 0] = tmux(["display-message", "-p", "-t", paneId, "#{cursor_y} #{cursor_x}"]).out.trim().split(" ").map(Number);
+  const start = Math.max(0, cy - 10);
+  const lines = tmux(["capture-pane", "-p", "-N", "-t", paneId, "-S", String(start), "-E", String(cy)]).out.replace(/\n$/, "").split("\n");
+  return readCommandLine(lines, cy - start, cx);
+}
+
+async function waitShell(paneId: string, ok: (l: NonNullable<ReturnType<typeof shellLine>>) => boolean): Promise<boolean> {
+  for (let i = 0; i < 20; i++) {
+    await Bun.sleep(100);
+    const l = shellLine(paneId);
+    if (l && ok(l)) return true;
+  }
+  return false;
+}
+
+// Never Enter on the live buffer: it may hold text right of the cursor the user never
+// saw, or the agent may have edited it since. Clear it, bracketed-paste exactly the
+// approved string (fish won't expand abbreviations on paste), verify, then Enter.
+// fish handles ^C after already queued input, so each step waits for the screen.
+async function runApproved(paneId: string, approved: string): Promise<{ ok: boolean; error?: string }> {
+  tmux(["send-keys", "-t", paneId, "C-c"]);
+  if (!(await waitShell(paneId, (l) => !l.command && !l.right))) return { ok: false, error: "couldn't clear the command line" };
+  const buf = `split-run-${crypto.randomUUID()}`;
+  tmuxChain([
+    ["set-buffer", "-b", buf, "--", approved],
+    ["paste-buffer", "-p", "-d", "-b", buf, "-t", paneId],
+  ]);
+  // Anything right of the cursor now is fish's autosuggestion, which Enter ignores.
+  if (!(await waitShell(paneId, (l) => l.command === approved))) {
+    tmux(["send-keys", "-t", paneId, "C-c"]);
+    return { ok: false, error: "pasted command didn't match, nothing ran" };
+  }
+  tmux(["send-keys", "-t", paneId, "Enter"]);
+  return { ok: true };
+}
+
 async function answerSplit(
   agent: LivePane,
   target: string,
@@ -956,7 +995,8 @@ async function answerSplit(
     // Run only exactly what the user saw; the agent may have swapped the line since.
     if (key !== "enter") return { status: 400, body: { ok: false, error: "bad key for this prompt" } };
     if (expect !== s.question) return { status: 409, body: { ok: false, error: "command changed", command: s.question } };
-    tmux(["send-keys", "-t", s.pane_id, "Enter"]);
+    const r = await runApproved(s.pane_id, expect);
+    if (!r.ok) return { status: 409, body: { ok: false, error: r.error } };
     return done(`run ${s.question.slice(0, 120)}`);
   }
   if (text !== undefined) {
