@@ -4,7 +4,7 @@ import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
-import { detectPrompt, IDLE_SHELLS, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
+import { detectPendingCommand, detectPrompt, IDLE_SHELLS, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
 import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
 import { audioFile, synthesize, ttsConfigured } from "./tts";
 import type { Overview, OverviewProject } from "./types";
@@ -838,7 +838,8 @@ export interface SplitDetail extends SplitPrompt {
 }
 
 const SPLIT_FORMAT = ["#{pane_id}", "#{window_id}", "#{@pane_agent}", "#{pane_current_command}", "#{cursor_y}",
-  "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}"].join(SEP);
+  "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}", "#{cursor_x}"].join(SEP);
+const CAPTURE_SEP = "<<split-capture-end>>";
 
 function parentPids(): Set<string> {
   const proc = Bun.spawnSync(["ps", "-A", "-o", "ppid="]);
@@ -854,6 +855,40 @@ function readSplit(paneId: string, command: string, cursorY: number, target: str
   return { ...prompt, pane_id: paneId, target, command, tail };
 }
 
+interface IdleShell {
+  paneId: string;
+  window: string;
+  command: string;
+  target: string;
+  cursorY: number;
+  cursorX: number;
+}
+
+// Idle shells are the bulk of the fleet's splits, so read them all in one tmux call:
+// just the rows above the cursor, each capture followed by a separator line.
+function readStagedCommands(shells: IdleShell[]): { window: string; detail: SplitDetail }[] {
+  if (!shells.length) return [];
+  const starts = shells.map((s) => Math.max(0, s.cursorY - 10));
+  const cmds: string[][] = [];
+  shells.forEach((s, i) => {
+    // -N keeps trailing spaces, which a wrapped command can end a row with
+    cmds.push(["capture-pane", "-p", "-N", "-t", s.paneId, "-S", String(starts[i]), "-E", String(s.cursorY)]);
+    cmds.push(["display-message", "-p", CAPTURE_SEP]);
+  });
+  const { out } = tmuxChain(cmds);
+  const chunks = out.split(`${CAPTURE_SEP}\n`);
+  const found: { window: string; detail: SplitDetail }[] = [];
+  shells.forEach((s, i) => {
+    const lines = (chunks[i] ?? "").replace(/\n$/, "").split("\n");
+    const staged = detectPendingCommand(lines, s.cursorY - starts[i]!, s.cursorX);
+    if (!staged) return;
+    const { row, ...prompt } = staged;
+    const tail = lines.slice(0, row).filter((l) => l.trim()).slice(-8).map((l) => l.trimEnd().slice(0, 200)).join("\n");
+    found.push({ window: s.window, detail: { ...prompt, pane_id: s.paneId, target: s.target, command: s.command, tail } });
+  });
+  return found;
+}
+
 // windowId → waiting splits. One list-panes call; only non-shell candidates get captured.
 function scanSplits(windowId?: string): Map<string, SplitDetail[]> {
   const args = windowId
@@ -862,15 +897,21 @@ function scanSplits(windowId?: string): Map<string, SplitDetail[]> {
   const { ok, out } = tmux(args);
   const result = new Map<string, SplitDetail[]>();
   if (!ok) return result;
-  const rows = out.trimEnd().split("\n").map((l) => l.split(SEP)).filter((r) => r.length >= 7);
+  const rows = out.trimEnd().split("\n").map((l) => l.split(SEP)).filter((r) => r.length >= 8);
   const agentWindows = new Set(rows.filter((r) => r[2]).map((r) => r[1]!));
+  const add = (win: string, s: SplitDetail) => result.set(win, [...(result.get(win) ?? []), s]);
   let parents: Set<string> | null = null;
-  for (const [id, win, agent, cmd, cy, target, pid] of rows) {
+  const idle: IdleShell[] = [];
+  for (const [id, win, agent, cmd, cy, target, pid, cx] of rows) {
     if (agent || !agentWindows.has(win!) || NO_PROMPT_COMMANDS.has(cmd!)) continue;
-    if (IDLE_SHELLS.has(cmd!) && !(parents ??= parentPids()).has(pid!)) continue;
+    if (IDLE_SHELLS.has(cmd!) && !(parents ??= parentPids()).has(pid!)) {
+      idle.push({ paneId: id!, window: win!, command: cmd!, target: target!, cursorY: Number(cy) || 0, cursorX: Number(cx) || 0 });
+      continue;
+    }
     const s = readSplit(id!, cmd!, Number(cy) || 0, target!);
-    if (s) result.set(win!, [...(result.get(win!) ?? []), s]);
+    if (s) add(win!, s);
   }
+  for (const { window, detail } of readStagedCommands(idle)) add(window, detail);
   return result;
 }
 
@@ -896,6 +937,7 @@ async function answerSplit(
   target: string,
   key: string | undefined,
   text: string | undefined,
+  expect: string | undefined,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   // Only a pane in the agent's own window that shows a prompt right now - never an
   // arbitrary shell.
@@ -910,6 +952,13 @@ async function answerSplit(
     return done("key=ctrl-c");
   }
   if (s.kind === "password") return { status: 400, body: { ok: false, error: "answer passwords in the terminal" } };
+  if (s.kind === "command") {
+    // Run only exactly what the user saw; the agent may have swapped the line since.
+    if (key !== "enter") return { status: 400, body: { ok: false, error: "bad key for this prompt" } };
+    if (expect !== s.question) return { status: 409, body: { ok: false, error: "command changed", command: s.question } };
+    tmux(["send-keys", "-t", s.pane_id, "Enter"]);
+    return done(`run ${s.question.slice(0, 120)}`);
+  }
   if (text !== undefined) {
     if (s.kind !== "input") return { status: 400, body: { ok: false, error: "not a text prompt" } };
     sendText(s.pane_id, text);
@@ -955,7 +1004,7 @@ function tmuxChain(cmds: string[][]) {
     if (i) args.push(";");
     args.push(...c);
   });
-  tmux(args);
+  return tmux(args);
 }
 
 function markSeen(paneId: string) {
@@ -1416,6 +1465,7 @@ Bun.serve<TermData>({
         text?: string;
         key?: string;
         target?: string;
+        expect?: string;
       };
       if (!body.pane_id) return json({ error: "pane_id required" }, 400);
       const live = paneExists(body.pane_id);
@@ -1446,7 +1496,7 @@ Bun.serve<TermData>({
           return json({ ok: true, echo: capture(live.paneId, 12) });
         }
         case "/split-answer": {
-          const r = await answerSplit(live, body.target ?? "", body.key, body.text);
+          const r = await answerSplit(live, body.target ?? "", body.key, body.text, body.expect);
           return json(r.body, r.status);
         }
         case "/answer": {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectPrompt } from "./split";
+import { detectPendingCommand, detectPrompt } from "./split";
 
 // cursor on the last line unless given
 const d = (lines: string[], cursorY = lines.length - 1) => detectPrompt(lines.join("\n"), cursorY);
@@ -68,5 +68,50 @@ describe("detectPrompt", () => {
 
   test("y/n far up in the log is ignored", () => {
     expect(d(["Continue? (y/n) y", "ok", "building…", "still building"])).toBeNull();
+  });
+});
+
+describe("detectPendingCommand", () => {
+  const PROMPT = "[I]  kdesutter  ~  Documents  …  main  12⬆  850⬇  97✎  3674?  $ ";
+  const at = (line: string) => Bun.stringWidth(line);
+
+  test("staged command at Kai's fish prompt", () => {
+    const line = PROMPT + "bash ~/.cache/main0-tmp/ovh/sei-close75.sh";
+    expect(detectPendingCommand(["SEI2-EXIT 10:48:27Z", line], 1, at(line))).toMatchObject({
+      kind: "command",
+      question: "bash ~/.cache/main0-tmp/ovh/sei-close75.sh",
+    });
+  });
+
+  test("powerline arrow closing the prompt is not a command", () => {
+    const line = "[I]  kdesutter \ue0b0 ~ \ue0b0 Gem0 \ue0b0 main \ue0b0 $ \ue0b0 ";
+    expect(detectPendingCommand([line.trimEnd()], 0, at(line))).toBeNull();
+    expect(detectPendingCommand([line + "ls -la"], 0, at(line + "ls -la"))?.question).toBe("ls -la");
+  });
+
+  test("empty prompt is not pending", () => {
+    expect(detectPendingCommand([PROMPT], 0, at(PROMPT))).toBeNull();
+  });
+
+  test("autosuggestion right of the cursor is ignored", () => {
+    expect(detectPendingCommand([PROMPT + "bash ~/old-script.sh"], 0, at(PROMPT))).toBeNull();
+    const typed = PROMPT + "ba";
+    expect(detectPendingCommand([typed + "sh ~/old-script.sh"], 0, at(typed))?.question).toBe("ba");
+  });
+
+  test("wrapped long command", () => {
+    const lines = [PROMPT + "bash ~/very/long/path/that/wraps/", "onto/the/next/line.sh"];
+    const p = detectPendingCommand(lines, 1, at(lines[1]!));
+    expect(p?.question).toBe("bash ~/very/long/path/that/wraps/onto/the/next/line.sh");
+    expect(p?.row).toBe(0);
+  });
+
+  test("output line without a prompt is not a command", () => {
+    expect(detectPendingCommand(["building…", "done"], 1, 4)).toBeNull();
+  });
+
+  test("redirect in the command doesn't cut it", () => {
+    const line = "~ $ ./run.sh > out.log";
+    expect(detectPendingCommand([line], 0, at(line))?.question).toBe("./run.sh > out.log");
   });
 });

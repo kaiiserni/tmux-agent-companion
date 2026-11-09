@@ -89,7 +89,10 @@ export function SplitPromptCard({ paneId, split, onAnswered }: { paneId: string;
           {redact(tail, priv)}
         </Text>
       ) : null}
-      <Text style={[styles.question, { color: colors.text, fontFamily: font.semibold }]}>{redact(split.question, priv)}</Text>
+      <Text style={[styles.question, { color: colors.text, fontFamily: font.semibold }]}>
+        {split.kind === 'command' ? '$ ' : ''}
+        {redact(split.question, priv)}
+      </Text>
 
       {split.kind === 'menu' || split.kind === 'select' ? (
         <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
@@ -127,7 +130,8 @@ export function SplitPromptCard({ paneId, split, onAnswered }: { paneId: string;
         {split.kind === 'yesno' ? [btn('Yes', colors.running, () => reply({ key: 'y' })), btn('No', colors.attention, () => reply({ key: 'n' }))] : null}
         {split.kind === 'enter' || split.kind === 'input' ? btn(split.kind === 'input' ? 'Enter (default)' : 'Enter', colors.accent, () => reply({ key: 'enter' })) : null}
         {split.kind === 'menu' || split.kind === 'select' ? btn('Esc', colors.muted, () => reply({ key: 'esc' })) : null}
-        {btn('⌃C', colors.attention, interrupt)}
+        {split.kind === 'command' ? btn('Run', colors.running, () => reply({ key: 'enter', expect: split.question })) : null}
+        {split.kind === 'command' ? btn('Clear', colors.muted, () => reply({ key: 'ctrl-c' })) : btn('⌃C', colors.attention, interrupt)}
       </View>
 
       {splitAnswer.isError ? (

@@ -1,7 +1,7 @@
 import { getToken } from './config';
 
 export interface SplitPrompt {
-  kind: 'yesno' | 'menu' | 'select' | 'input' | 'enter' | 'password';
+  kind: 'yesno' | 'menu' | 'select' | 'input' | 'enter' | 'password' | 'command';
   question: string;
   options: { num: number; label: string; description?: string }[];
   // select only: 0-based highlighted option
@@ -210,7 +210,8 @@ export const getPrompt = (b: string, paneId: string) =>
   get<PromptState>(b, `/prompt?pane_id=${encodeURIComponent(paneId)}`);
 export const postSend = (b: string, paneId: string, text: string) => post(b, '/send', { pane_id: paneId, text });
 export const postAnswer = (b: string, paneId: string, key: string) => post(b, '/answer', { pane_id: paneId, key });
-export type SplitReply = { key: string } | { text: string };
+// expect: the staged command the user saw; the bridge refuses to run anything else
+export type SplitReply = { key: string; expect?: string } | { text: string };
 export const postSplitAnswer = (b: string, paneId: string, target: string, reply: SplitReply) =>
   post(b, '/split-answer', { pane_id: paneId, target, ...reply });
 

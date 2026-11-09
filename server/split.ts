@@ -4,7 +4,7 @@
 
 import { parseMenu, type MenuOption } from "./menu";
 
-export type SplitKind = "yesno" | "menu" | "select" | "input" | "enter" | "password";
+export type SplitKind = "yesno" | "menu" | "select" | "input" | "enter" | "password" | "command";
 
 export interface SplitPrompt {
   kind: SplitKind;
@@ -117,6 +117,45 @@ function detectSelect(region: string[]): SplitPrompt | null {
   };
 }
 
+// Idle shell with a command typed after the prompt but not run: an agent staged it
+// for the user's Enter. lines = capture ending at the cursor row, cursorX = tmux
+// #{cursor_x}. Only text left of the cursor counts (fish shows its autosuggestion
+// right of it); columns are display width, so powerline/emoji glyphs don't shift it.
+// Powerline/nerd-font glyphs (private use area) may close the prompt segment.
+const PROMPT_END = /(?:^|\s)[$❯%#]\s(?:[\uE000-\uF8FF]\s?)*/;
+
+// row = line holding the prompt, so callers can show only the output above it.
+export function detectPendingCommand(
+  lines: string[],
+  cursorIdx: number,
+  cursorX: number,
+): (SplitPrompt & { row: number }) | null {
+  const parts = [leftOfColumn(lines[cursorIdx] ?? "", cursorX)];
+  // A long command wraps; walk up to the line that holds the prompt.
+  for (let i = cursorIdx; i >= 0 && i > cursorIdx - 4; i--) {
+    const m = PROMPT_END.exec(parts[0]!);
+    if (m) {
+      parts[0] = parts[0]!.slice(m.index + m[0].length);
+      const command = parts.join("").trim();
+      return command ? { kind: "command", question: command, options: [], selected: null, row: i } : null;
+    }
+    if (i > 0) parts.unshift(lines[i - 1] ?? "");
+  }
+  return null;
+}
+
+function leftOfColumn(line: string, col: number): string {
+  let width = 0;
+  let out = "";
+  for (const ch of line) {
+    const w = Bun.stringWidth(ch);
+    if (width + w > col) break;
+    width += w;
+    out += ch;
+  }
+  return out;
+}
+
 export const SPLIT_LABEL: Record<SplitKind, string> = {
   yesno: "split: y/n",
   menu: "split: choice",
@@ -124,4 +163,5 @@ export const SPLIT_LABEL: Record<SplitKind, string> = {
   input: "split: input",
   enter: "split: press enter",
   password: "split: password",
+  command: "split: command ready",
 };
