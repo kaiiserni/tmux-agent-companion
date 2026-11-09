@@ -171,6 +171,30 @@ function leftOfColumn(line: string, col: number): string {
   return out;
 }
 
+// The activity hook logs Bash labels with "|" and newlines turned into spaces.
+export const normalizeCmd = (t: string) => t.replace(/[|\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
+
+export interface StagingLine {
+  minute: number; // HH:MM as minutes since midnight
+  text: string; // normalized send-keys Bash call
+}
+
+// The agent whose most recent send-keys call (last 12h) contains the staged text
+// verbatim. Built with variables ($CMD) it won't match; callers fall back to the window.
+export function pickStager(command: string, logs: Map<string, StagingLine[]>, nowMinute: number): string | null {
+  const needle = normalizeCmd(command);
+  if (needle.length < 6) return null; // "ls" would match half the fleet
+  let best: { pane: string; ago: number } | null = null;
+  for (const [pane, lines] of logs) {
+    for (const l of lines) {
+      if (!l.text.includes(needle)) continue;
+      const ago = (nowMinute - l.minute + 1440) % 1440;
+      if (ago <= 720 && (!best || ago < best.ago)) best = { pane, ago };
+    }
+  }
+  return best?.pane ?? null;
+}
+
 export const SPLIT_LABEL: Record<SplitKind, string> = {
   yesno: "split: y/n",
   menu: "split: choice",

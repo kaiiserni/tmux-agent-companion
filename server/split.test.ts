@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectPendingCommand, detectPrompt } from "./split";
+import { detectPendingCommand, detectPrompt, normalizeCmd, pickStager } from "./split";
 
 // cursor on the last line unless given
 const d = (lines: string[], cursorY = lines.length - 1) => detectPrompt(lines.join("\n"), cursorY);
@@ -113,5 +113,40 @@ describe("detectPendingCommand", () => {
   test("redirect in the command doesn't cut it", () => {
     const line = "~ $ ./run.sh > out.log";
     expect(detectPendingCommand([line], 0, at(line))?.question).toBe("./run.sh > out.log");
+  });
+});
+
+describe("pickStager", () => {
+  const line = (hhmm: string, cmd: string) => ({
+    minute: Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3)),
+    text: normalizeCmd(cmd),
+  });
+  const now = 11 * 60 + 30;
+
+  test("agent whose send-keys holds the staged text", () => {
+    const logs = new Map([
+      ["%115", [line("11:20", `tmux send-keys -t cc-x:0.3 -l "bash ~/.cache/ovh/sei-close75.sh"`)]],
+      ["%285", [line("11:25", `tmux send-keys -t cc-x:1.0 "bun run dev" Enter`)]],
+    ]);
+    expect(pickStager("bash ~/.cache/ovh/sei-close75.sh", logs, now)).toBe("%115");
+  });
+
+  test("pipes logged as spaces still match", () => {
+    const logs = new Map([["%7", [line("11:29", "tmux send-keys -t x -l 'ps aux   grep bun'")]]]);
+    expect(pickStager("ps aux | grep bun", logs, now)).toBe("%7");
+  });
+
+  test("most recent stager wins, across midnight too", () => {
+    const logs = new Map([
+      ["%1", [line("23:50", "send-keys -l 'make deploy-prod'")]],
+      ["%2", [line("00:05", "send-keys -l 'make deploy-prod'")]],
+    ]);
+    expect(pickStager("make deploy-prod", logs, 10)).toBe("%2");
+  });
+
+  test("stale or too short gives no owner", () => {
+    const logs = new Map([["%1", [line("08:00", "send-keys -l 'make deploy-prod'"), line("11:29", "send-keys -l ls")]]]);
+    expect(pickStager("make deploy-prod", logs, 21 * 60)).toBeNull();
+    expect(pickStager("ls", logs, now)).toBeNull();
   });
 });

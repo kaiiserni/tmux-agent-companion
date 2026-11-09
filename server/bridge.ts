@@ -4,7 +4,7 @@ import { cpus, freemem, homedir, loadavg, totalmem, uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { activityLogPath, activityMtime, projectName } from "./lib";
 import { parseMenu } from "./menu";
-import { detectPendingCommand, detectPrompt, IDLE_SHELLS, readCommandLine, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
+import { detectPendingCommand, detectPrompt, IDLE_SHELLS, normalizeCmd, pickStager, readCommandLine, type StagingLine, NO_PROMPT_COMMANDS, SPLIT_LABEL, type SplitPrompt } from "./split";
 import { type PushEnv, pushConfigured, registerToken, sendAlert, tokenCount } from "./push";
 import { audioFile, synthesize, ttsConfigured } from "./tts";
 import type { Overview, OverviewProject } from "./types";
@@ -828,7 +828,9 @@ function sendKey(paneId: string, key: string) {
 
 // --- split panes ---------------------------------------------------------------
 // The shell/CLI next to an agent often waits on a sudo/y-n/wizard prompt the agent
-// started. Agent panes are skipped (they have their own /prompt flow).
+// started, or holds a command the agent typed for the user's Enter. Agent panes are
+// skipped (they have their own /prompt flow). Prompts belong to the agents in their
+// window; a staged command belongs to the agent that typed it, anywhere in the session.
 
 export interface SplitDetail extends SplitPrompt {
   pane_id: string;
@@ -837,8 +839,15 @@ export interface SplitDetail extends SplitPrompt {
   tail: string;
 }
 
+interface FoundSplit {
+  detail: SplitDetail;
+  window: string;
+  // agent pane that staged this command (activity-log match), null = window rule
+  owner: string | null;
+}
+
 const SPLIT_FORMAT = ["#{pane_id}", "#{window_id}", "#{@pane_agent}", "#{pane_current_command}", "#{cursor_y}",
-  "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}", "#{cursor_x}"].join(SEP);
+  "#{session_name}:#{window_index}.#{pane_index}", "#{pane_pid}", "#{cursor_x}", "#{session_name}"].join(SEP);
 
 function parentPids(): Set<string> {
   const proc = Bun.spawnSync(["ps", "-A", "-o", "ppid="]);
@@ -861,11 +870,46 @@ interface IdleShell {
   target: string;
   cursorY: number;
   cursorX: number;
+  session: string;
+}
+
+const stagingCache = new Map<string, { mtime: number; lines: StagingLine[] }>();
+
+function stagingLines(paneId: string) {
+  const mtime = activityMtime(paneId);
+  const hit = stagingCache.get(paneId);
+  if (hit && hit.mtime === mtime) return hit.lines;
+  let lines: StagingLine[] = [];
+  try {
+    lines = tailText(activityLogPath(paneId), 512 * 1024)
+      .split("\n")
+      .filter((l) => l.includes("send-keys"))
+      .flatMap((l) => {
+        const m = l.match(/^(\d\d):(\d\d)\|Bash\|(.*)$/);
+        return m ? [{ minute: Number(m[1]) * 60 + Number(m[2]), text: normalizeCmd(m[3]!) }] : [];
+      });
+  } catch {
+    /* no log */
+  }
+  stagingCache.set(paneId, { mtime, lines });
+  return lines;
+}
+
+function findStager(command: string, agents: string[]): string | null {
+  const d = new Date(); // hook stamps HH:MM in the box's local time
+  return pickStager(command, new Map(agents.map((a) => [a, stagingLines(a)])), d.getHours() * 60 + d.getMinutes());
 }
 
 // Idle shells are the bulk of the fleet's splits, so read them all in one tmux call:
 // just the rows above the cursor, each capture followed by a separator line.
-function readStagedCommands(shells: IdleShell[]): { window: string; detail: SplitDetail }[] {
+// tmux rejects an oversized command line ("command too long"), so batch per 40 panes.
+function readStagedCommands(shells: IdleShell[]): { shell: IdleShell; detail: SplitDetail }[] {
+  const found: { shell: IdleShell; detail: SplitDetail }[] = [];
+  for (let i = 0; i < shells.length; i += 40) found.push(...readStagedBatch(shells.slice(i, i + 40)));
+  return found;
+}
+
+function readStagedBatch(shells: IdleShell[]): { shell: IdleShell; detail: SplitDetail }[] {
   if (!shells.length) return [];
   const starts = shells.map((s) => Math.max(0, s.cursorY - 10));
   // Fresh nonce per scan: pane output can't fake a boundary and shift captures between panes.
@@ -879,47 +923,58 @@ function readStagedCommands(shells: IdleShell[]): { window: string; detail: Spli
   const { out } = tmuxChain(cmds);
   const chunks = out.split(`${sep}\n`);
   if (chunks.length !== shells.length + 1) return [];
-  const found: { window: string; detail: SplitDetail }[] = [];
+  const found: { shell: IdleShell; detail: SplitDetail }[] = [];
   shells.forEach((s, i) => {
     const lines = (chunks[i] ?? "").replace(/\n$/, "").split("\n");
     const staged = detectPendingCommand(lines, s.cursorY - starts[i]!, s.cursorX);
     if (!staged) return;
     const { row, ...prompt } = staged;
     const tail = lines.slice(0, row).filter((l) => l.trim()).slice(-8).map((l) => l.trimEnd().slice(0, 200)).join("\n");
-    found.push({ window: s.window, detail: { ...prompt, pane_id: s.paneId, target: s.target, command: s.command, tail } });
+    found.push({ shell: s, detail: { ...prompt, pane_id: s.paneId, target: s.target, command: s.command, tail } });
   });
   return found;
 }
 
-// windowId → waiting splits. One list-panes call; only non-shell candidates get captured.
-function scanSplits(windowId?: string): Map<string, SplitDetail[]> {
-  const args = windowId
-    ? ["list-panes", "-t", windowId, "-F", SPLIT_FORMAT]
+// One list-panes call; prompt candidates get their own capture, idle shells one batch.
+function scanSplits(session?: string): FoundSplit[] {
+  const args = session
+    ? ["list-panes", "-s", "-t", session, "-F", SPLIT_FORMAT]
     : ["list-panes", "-a", "-f", "#{==:#{m:term_*,#{session_name}},0}", "-F", SPLIT_FORMAT];
   const { ok, out } = tmux(args);
-  const result = new Map<string, SplitDetail[]>();
-  if (!ok) return result;
-  const rows = out.trimEnd().split("\n").map((l) => l.split(SEP)).filter((r) => r.length >= 8);
+  if (!ok) return [];
+  const rows = out.trimEnd().split("\n").map((l) => l.split(SEP)).filter((r) => r.length >= 9);
   const agentWindows = new Set(rows.filter((r) => r[2]).map((r) => r[1]!));
-  const add = (win: string, s: SplitDetail) => result.set(win, [...(result.get(win) ?? []), s]);
+  const agentsBySession = new Map<string, string[]>();
+  for (const r of rows) if (r[2]) agentsBySession.set(r[8]!, [...(agentsBySession.get(r[8]!) ?? []), r[0]!]);
+  const found: FoundSplit[] = [];
   let parents: Set<string> | null = null;
   const idle: IdleShell[] = [];
-  for (const [id, win, agent, cmd, cy, target, pid, cx] of rows) {
-    if (agent || !agentWindows.has(win!) || NO_PROMPT_COMMANDS.has(cmd!)) continue;
+  for (const [id, win, agent, cmd, cy, target, pid, cx, sess] of rows) {
+    if (agent || !agentsBySession.has(sess!) || NO_PROMPT_COMMANDS.has(cmd!)) continue;
     if (IDLE_SHELLS.has(cmd!) && !(parents ??= parentPids()).has(pid!)) {
-      idle.push({ paneId: id!, window: win!, command: cmd!, target: target!, cursorY: Number(cy) || 0, cursorX: Number(cx) || 0 });
+      idle.push({ paneId: id!, window: win!, command: cmd!, target: target!, cursorY: Number(cy) || 0, cursorX: Number(cx) || 0, session: sess! });
       continue;
     }
+    if (!agentWindows.has(win!)) continue;
     const s = readSplit(id!, cmd!, Number(cy) || 0, target!);
-    if (s) add(win!, s);
+    if (s) found.push({ detail: s, window: win!, owner: null });
   }
-  for (const { window, detail } of readStagedCommands(idle)) add(window, detail);
-  return result;
+  for (const { shell, detail } of readStagedCommands(idle)) {
+    const owner = findStager(detail.question, agentsBySession.get(shell.session) ?? []);
+    if (owner || agentWindows.has(shell.window)) found.push({ detail, window: shell.window, owner });
+  }
+  return found;
+}
+
+function splitsFor(found: FoundSplit[], agent: { paneId: string; windowId: string }): SplitDetail[] {
+  return found
+    .filter((f) => f.owner === agent.paneId || (f.owner === null && f.window === agent.windowId))
+    .map((f) => f.detail);
 }
 
 function attachSplits(panes: LivePane[]) {
-  const splits = scanSplits();
-  for (const p of panes) p.split = splits.get(p.windowId)?.[0] ?? null;
+  const found = scanSplits();
+  for (const p of panes) p.split = splitsFor(found, p)[0] ?? null;
 }
 
 const SPLIT_KEYS: Record<string, string> = { enter: "Enter", esc: "Escape", up: "Up", down: "Down", "ctrl-c": "C-c" };
@@ -980,7 +1035,7 @@ async function answerSplit(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   // Only a pane in the agent's own window that shows a prompt right now - never an
   // arbitrary shell.
-  const s = (scanSplits(agent.windowId).get(agent.windowId) ?? []).find((x) => x.pane_id === target);
+  const s = splitsFor(scanSplits(agent.session), agent).find((x) => x.pane_id === target);
   if (!s) return { status: 409, body: { ok: false, error: "no prompt on screen" } };
   const done = (extra: string) => {
     audit("split-answer", s.pane_id, `via=${agent.paneId} ${extra}`);
@@ -1457,7 +1512,7 @@ Bun.serve<TermData>({
         waiting: isWaiting(live.status) || PERMISSION_REASONS.has(live.waitReason),
         options,
         screen,
-        siblings: scanSplits(live.windowId).get(live.windowId) ?? [],
+        siblings: splitsFor(scanSplits(live.session), live),
       });
     }
 
